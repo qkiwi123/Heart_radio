@@ -1,0 +1,99 @@
+[
+  {
+    "name": "get_capabilities",
+    "description": "List verified data and known unavailable metrics; does not wake the watch.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_heart_rate",
+    "description": "Read the existing real-time HR cache; never starts a second HR listener. Source sampling age is unverified.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "max_age_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_device_status",
+    "description": "Query watch battery, charging and connection state through the explicitly enabled Wi-Fi bridge.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fresh": {
+          "type": "boolean",
+          "description": "Bypass the saved status cache when true."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "measure_pressure",
+    "description": "Measure atmospheric pressure in hPa for 1 to 10 seconds. Requires watch bridge standby; holds CPU only for the bounded request.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "fresh": {
+          "type": "boolean",
+          "description": "Request a new measurement instead of an allowed recent result."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "measure_motion",
+    "description": "Measure raw watch-axis accelerometer including gravity (m/s^2), or gyroscope (rad/s), for 1 to 10 seconds. Does not infer steps or activity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "accelerometer",
+            "gyroscope"
+          ],
+          "default": "accelerometer"
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "fresh": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "cancel_measurement",
+    "description": "Cancel the active bounded sensor measurement. Does not stop standby or heart-rate broadcast. Omitting request_id captures the current measurement once.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+]

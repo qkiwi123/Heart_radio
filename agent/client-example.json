@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "heartradio": {
+      "command": "D:/Python/python.exe",
+      "args": ["D:/Android/heartradio/agent/mcp_server.py"]
+    }
+  }
+}
