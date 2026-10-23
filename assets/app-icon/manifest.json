@@ -1,0 +1,30 @@
+{
+  "selected": "B: bold devices, centrally symmetric",
+  "source": "heartradio.svg",
+  "sourceSha256": "bc39adcc33cebe074ce30f6b5e1fa6f4a75aa15fd9d5c15086c4640559312487",
+  "windowsSizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    96,
+    128,
+    256
+  ],
+  "androidAdaptiveForegroundScale": 0.8888888888888888,
+  "androidLegacyViewport": [
+    128,
+    128,
+    768,
+    768
+  ],
+  "windowsViewport": [
+    160,
+    160,
+    704,
+    704
+  ]
+}

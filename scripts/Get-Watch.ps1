@@ -1,5 +1,5 @@
-﻿[CmdletBinding()]
-param([string]$Serial, [string]$Adb = 'D:\Android\SDK\platform-tools\adb.exe')
+[CmdletBinding()]
+param([string]$Serial, [string]$Adb = 'adb')
 $ErrorActionPreference = 'Stop'
 $lines = & $Adb devices -l
 $candidates = @($lines | Where-Object { $_ -match '^\S+\s+device\s+.*model:OW20W2\b' })

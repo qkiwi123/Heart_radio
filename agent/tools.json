@@ -1,16 +1,71 @@
 [
   {
+    "name": "read_watch_data",
+    "description": "Read any selected combination of device_status, heart_rate, pressure, accelerometer and gyroscope concurrently; omitted metrics means all five. This can start new bounded sensor measurements: by default reuse permitted recent caches, otherwise query status, wait up to heart_seconds (default 5, maximum 15) for one valid heart callback, and sample pressure/motion for seconds (saved default 4, maximum 10). fresh=true bypasses caches, never permissions, busy slots or per-metric cooldown. All new watch operations require a connected paired route and synchronized Agent interaction permission. Overall ok=true means at least one metric succeeded; inspect complete, failedMetrics and every result before claiming success. Results have separate sources and receipt times, not a simultaneous physiological snapshot; source sampling age is unverified. Does not enable continuous broadcast, infer activity or change settings. Cancel active IDs obtained from get_capabilities using cancel_measurement.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "device_status",
+              "heart_rate",
+              "pressure",
+              "accelerometer",
+              "gyroscope"
+            ]
+          }
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Pressure and motion sampling window; defaults to the saved setting."
+        },
+        "heart_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 15,
+          "default": 5,
+          "description": "Maximum heart callback wait in this combined read; default 5 seconds for a quick snapshot. Explicitly use up to 15 when a longer heart wait is wanted."
+        },
+        "fresh": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "get_capabilities",
-    "description": "List verified data and known unavailable metrics; does not wake the watch.",
+    "description": "Read the local verified capability inventory, saved metric/effect limits and current active measurement IDs. No watch query, wake or sensor start. Available means historically verified on OW20W2 / Android 27 / OW20W2_11_A.92, not a live readiness check or a promise that permission, connection, fresh data or every sensor is currently available. Does not change settings or enable services.",
     "inputSchema": {
       "type": "object",
       "properties": {},
       "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     }
   },
   {
     "name": "get_heart_rate",
-    "description": "Read the existing real-time HR cache; never starts a second HR listener. Source sampling age is unverified.",
+    "description": "Read only allowed recent broadcast or one-shot heart results already saved on the PC; never queries the watch or starts measurement, including while Agent interaction is off. max_age_seconds can only tighten the saved heart receipt-age limit (1-30 seconds). Age is PC receipt age; source sampling age is unverified. May return stale/disconnected/no_valid_data with value=null; no number is guaranteed. For an explicitly wanted new callback use measure_heart_rate. Does not infer health, sleep or wear state.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -21,11 +76,17 @@
         }
       },
       "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     }
   },
   {
     "name": "get_device_status",
-    "description": "Query watch battery, charging and connection state through the explicitly enabled Wi-Fi bridge.",
+    "description": "Read a permitted recent PC status cache, otherwise actively query watch battery, charging, screen, connection and capture metadata through the selected paired Bluetooth/Wi-Fi route. fresh=true always bypasses the cache. New queries require connected, synchronized Agent interaction permission; allowed saved cache reads can work with interaction off. Battery temperature is not body temperature. Cache receipt time is not proof of current device state. Does not start sensors or enable services.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -35,11 +96,17 @@
         }
       },
       "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     }
   },
   {
     "name": "measure_pressure",
-    "description": "Measure atmospheric pressure in hPa for 1 to 10 seconds. Requires watch bridge standby; holds CPU only for the bounded request.",
+    "description": "Read a permitted same-duration recent pressure result, otherwise explicitly sample atmospheric pressure in hPa for 1-10 seconds (saved default 4). fresh=true bypasses only the cache. New measurements require a connected paired route, synchronized Agent interaction permission, enabled pressure metric and its cooldown/slot. The representative value is the mean of at most 64 retained samples, not a calibrated whole-window average or blood pressure. Successful output confirms listener and bounded CPU-lock cleanup; failures may provide no value. Never automatically retry.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -54,11 +121,17 @@
         }
       },
       "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
     }
   },
   {
     "name": "measure_motion",
-    "description": "Measure raw watch-axis accelerometer including gravity (m/s^2), or gyroscope (rad/s), for 1 to 10 seconds. Does not infer steps or activity.",
+    "description": "Read a permitted same-kind/same-duration recent result, otherwise explicitly sample accelerometer including gravity (m/s^2) or gyroscope (rad/s), for 1-10 seconds (saved default 4). Default kind is accelerometer. fresh=true bypasses only the cache. New measurements require a connected paired route, synchronized Agent interaction permission, enabled metric and its cooldown/slot. Returns at most 64 raw watch-axis samples with receipt/source metadata, not steps, distance, posture, walking or sleep. Source sampling age and calibration are unverified. Successful output confirms listener and bounded CPU-lock cleanup. Never automatically retry.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -80,11 +153,17 @@
         }
       },
       "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
     }
   },
   {
     "name": "cancel_measurement",
-    "description": "Cancel the active bounded sensor measurement. Does not stop standby or heart-rate broadcast. Omitting request_id captures the current measurement once.",
+    "description": "Request cancellation of the bounded measurement matching request_id; other metrics continue. Omitting request_id captures and cancels all measurements active at that moment, including get_user_state motion windows. Active IDs can be read with get_capabilities or the dashboard. The cancellation reply is not proof of cleanup: inspect the original measurement result for listenersReleased and requestWakeLockHeldAtResult. A missing/finished ID returns no_active_measurement. Identical callers share one physical measurement and ID, so cancellation affects every caller sharing it. Does not stop the connection or continuous heart broadcast. May be called after Agent interaction closes. MCP protocol cancellation notifications alone do not invoke this tool.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -94,6 +173,191 @@
         }
       },
       "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "send_reminder",
+    "description": "Immediately send explicit plain-text content to the watch with optional vibration and screen wake, through the shared Agent interaction gate. Requires a new unique reminder_id; reuse the SAME ID and identical content/effects for an uncertain retry, never generate a new ID to retry. Same retained ID returns the old receipt without replay or renewed TTL (bounded 128-entry history). No automatic resend on timeout/reconnect. Default strong template vibrates twice and wakes the screen; flags override it. Issued means API called, displayed means page shown, only acknowledgedAtMs means the user tapped acknowledgement. Respects DND/lock screen. This is an immediate reminder, not a scheduled task. Check get_capabilities for user-controlled effect permissions and current limits: default maximum vibration sequence including gaps is 6000ms; the user may change it within the 10000ms technical ceiling. Screen duration must also obey the user limit. Tools cannot change these user settings; an over-limit request is rejected. Sound defaults to false. Set sound=true and sound_source=system to request one system notification tone, only if the user has enabled sound permission. Silent/DND/notification volume and channel settings still apply. Custom audio is reserved and not implemented. soundIssued=true means MediaPlayer.start() was called; soundCompletedAtMs is a completion callback, neither proves audible output. Local deduplication and the watch journal are bounded (128 retained IDs); after eviction there is no permanent exactly-once guarantee. Do not replay an old intent with any ID.",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "reminder_id",
+        "title",
+        "body"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reminder_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "Unique ID for this intent, preferably UUID hex. Keep it for status queries and uncertain retries."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Nonblank plain text, Unicode characters counted whole."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Nonblank plain text. Newlines allowed. The watch scrolls long content with a fixed acknowledgement button."
+        },
+        "template": {
+          "type": "string",
+          "enum": [
+            "strong",
+            "standard",
+            "light",
+            "silent",
+            "notification_only"
+          ],
+          "default": "strong",
+          "description": "Strong/standard/light vibrate and wake; silent only wakes; notification_only does neither."
+        },
+        "vibrate": {
+          "type": "boolean",
+          "description": "Override the template vibration flag."
+        },
+        "screen": {
+          "type": "boolean",
+          "description": "Override automatic wake/page launch. False uses a quiet notification channel."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 60,
+          "description": "Validity from this immediate send; no future scheduling or TTL renewal for duplicate IDs."
+        },
+        "screen_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 30,
+          "default": 15,
+          "description": "Bounded reminder page display time when screen=true."
+        },
+        "vibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Override individual template fields. Total pulse_ms*count + gap_ms*(count-1) must not exceed 10000ms. Applied values and hardware support are in the receipt.",
+          "properties": {
+            "pulse_ms": {
+              "type": "integer",
+              "minimum": 20,
+              "maximum": 1000
+            },
+            "gap_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "amplitude": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 255,
+              "description": "Requested amplitude; hardware without control uses default amplitude and reports null applied amplitude."
+            }
+          }
+        },
+        "sound": {
+          "type": "boolean",
+          "default": false,
+          "description": "Request one system notification tone. Requires the user sound permission; obeys silent/DND and system volume."
+        },
+        "sound_source": {
+          "type": "string",
+          "enum": [
+            "system"
+          ],
+          "default": "system",
+          "description": "Use the watch system notification tone. Custom assets are not yet available."
+        }
+      }
+    }
+  },
+  {
+    "name": "get_reminder_status",
+    "description": "Read one reminder's saved PC attempt and receipt by ID. Default fresh=false only reads local data and works while Agent interaction is off. Explicit fresh=true queries the watch and requires the same synchronized interaction gate as other new watch reads. Does not send the reminder again. Receipt age is PC receipt age, not proof the user saw or read the content.",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "reminder_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reminder_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "fresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "False: local saved data only. True: explicitly ask the watch for a current receipt, without resending effects."
+        }
+      }
+    }
+  },
+  {
+    "name": "measure_heart_rate",
+    "description": "Explicitly request one fresh valid heart-rate callback, waiting at most 15 seconds (default 15). Requires synchronized Agent interaction, connection and heart-rate permission. Uses the same physical heart listener as continuous broadcast, but never enables the broadcast switch. Ends on the first valid callback, timeout, cancellation or disconnect; releases only this request's sensor ownership and bounded CPU lock, preserving existing broadcast. May return timeout/no_contact/no_valid_data instead of a number; never auto-retry. cancel_measurement can cancel it. get_heart_rate can subsequently read the saved valid result.",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 15,
+          "default": 15,
+          "description": "Maximum callback wait, not a promise of a valid result within this time."
+        }
+      }
+    }
+  },
+  {
+    "name": "get_user_state",
+    "description": "Perform one fresh bounded 30-second accelerometer/gyroscope observation and return a compact three-tier local guess or unknown: possible rest; likely awake with little activity; likely awake with clear activity. Requires both motion metrics enabled and synchronized Agent interaction. Uses existing heart readings observed during this request only; never enables continuous heart capture. Service availability implies normal wear by the user's convention, not automatic wear detection. Awake/rest are unvalidated guesses, not measured facts; no sleep or walking recognition. No history query, periodic sampling, reminders or raw arrays. Takes about 30-40 seconds. cancel_measurement can cancel active windows from another call/client. Do not automatically retry unknown/insufficient-evidence results. Same-time state queries return busy. No heart capture is started even when rest evidence needs heart readings; very quiet motion without sufficient stable heart receipts returns unknown. This is the only tool returning weak activity/rest tiers; never reinterpret its awake labels as measured wakefulness.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
     }
   }
 ]

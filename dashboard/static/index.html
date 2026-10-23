@@ -1,68 +1,55 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HeartRadio · 本地心率</title><link rel="stylesheet" href="/style.css"></head>
-<body><main>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HeartRadio · 本地心率</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/polish.css"><link rel="stylesheet" href="/pages.css"></head>
+<body><a class="skip-link" href="#pageTitle">跳到页面内容</a><main>
 <header><div class="brand"><span class="brand-icon">♥</span><div><strong>HeartRadio</strong><small>手表到电脑 · 本地心率</small></div></div><div class="header-right"><span class="privacy">仅本机可见</span><time id="clock">—</time></div></header>
-<section class="intro"><div><p class="eyebrow">OPPO WATCH 2 / WI-FI</p><h1 id="pageTitle">看见此刻的心率。</h1><p class="subtitle">日常参考，采集记录保存在本机。</p></div><a id="liveExport" class="download" href="/api/export.csv" download>导出本次记录 <span>↗</span></a></section>
-<section class="desktop-controls" aria-label="桌面小窗"><div><strong>放到桌面上</strong><span>每个小窗可单独显示、固定；固定后整窗点击穿透</span></div><div class="widget-control-pair"><button id="widgetCurrent" type="button" aria-pressed="false">显示桌面心率</button><button id="widgetCurrentLock" type="button" aria-pressed="false">固定心率窗</button></div><div class="widget-control-pair"><button id="widgetTrend" type="button" aria-pressed="false">显示桌面曲线</button><button id="widgetTrendLock" type="button" aria-pressed="false">固定曲线窗</button></div><p id="widgetMessage" role="status"></p></section>
-<nav class="view-tabs" role="tablist" aria-label="查看模式"><button id="viewLive" role="tab" aria-selected="true" aria-controls="liveView" class="selected" type="button">当前采集</button><button id="viewHistory" role="tab" aria-selected="false" aria-controls="historyView" type="button">历史记录 · 年 / 月 / 日</button></nav>
-<section id="liveView" role="tabpanel" aria-labelledby="viewLive">
-<section class="card receiver-settings" aria-labelledby="receiverSettingsTitle">
-<div><h2 id="receiverSettingsTitle">接收时长</h2><p>保存后立即生效；限时从本次保存开始计时。下次启动沿用已保存的时长。</p></div>
-<form id="receiverSettingsForm">
-<label class="unlimited-option"><input id="receiverUnlimited" type="checkbox" checked> 不限时</label>
-<label>限制时长 <input id="receiverAmount" type="number" value="60" min="0.0003" step="any" inputmode="decimal" disabled required aria-label="限制时长数值"></label>
-<select id="receiverUnit" aria-label="时长单位" disabled><option value="minutes">分钟</option><option value="hours">小时</option></select>
-<button id="receiverSave" type="submit" disabled>保存设置</button>
-</form><p id="receiverLimitStatus" role="status">正在读取接收设置…</p><p id="receiverSettingsMessage" role="status"></p>
-<p class="receiver-note">到时只停止电脑接收；手表采集仍需在手表上停止。接收器已停止时，保存设置不会自动重新启动。</p>
-</section>
+<div class="dashboard-shell">
+<aside class="sidebar"><nav class="page-nav" aria-label="功能导航">
+<p class="nav-label">日常使用</p>
+<a href="#overview" data-page="overview"><span class="nav-icon" aria-hidden="true">◉</span>总览与连接</a>
+<a href="#device" data-page="device"><span class="nav-icon" aria-hidden="true">▤</span>设备读取</a>
+<a href="#reminders" data-page="reminders"><span class="nav-icon" aria-hidden="true">◇</span>发送提醒</a>
+<p class="nav-label">数据与记录</p>
+<a href="#heart-trend" data-page="heart-trend"><span class="nav-icon" aria-hidden="true">⌁</span>心率趋势</a>
+<a href="#heart-history" data-page="heart-history"><span class="nav-icon" aria-hidden="true">◷</span>心率历史</a>
+<a href="#reminder-history" data-page="reminder-history"><span class="nav-icon" aria-hidden="true">▥</span>提醒历史</a>
+<p class="nav-label">偏好</p>
+<a href="#settings" data-page="settings"><span class="nav-icon" aria-hidden="true">⚙</span>设置与小窗</a>
+</nav><p class="sidebar-note">切换页面保留当前输入<br>采集与连接在后台继续</p></aside>
+<div class="page-content">
+<section class="intro"><div><p class="eyebrow">OPPO WATCH 2 / WI-FI</p><h1 id="pageTitle" tabindex="-1">看见此刻的心率。</h1><p id="pageSubtitle" class="subtitle">实时心率、独立读取与提醒，都在这里。</p></div><a id="liveExport" class="download" href="/api/export.csv" download>导出本次记录 <span>↗</span></a></section>
+<section id="liveView" data-page-panel="overview" aria-label="总览与连接">
 <section class="top-grid">
 <article class="card current"><div class="card-top"><span>最近收到的心率</span><span id="liveBadge" class="badge">等待连接</span></div><div class="heart-value"><span class="heart">♥</span><strong id="bpm">—</strong><span class="unit">bpm</span></div><p id="status" class="status">正在读取本地接收记录…</p><div class="current-bottom"><span id="age">尚无新事件</span><span id="accuracy">精度状态 —</span></div></article>
-<article class="card session"><div class="card-top"><span id="timerLabel">接收运行时长</span><span class="small-label">NATURAL USE</span></div><div class="timer"><strong id="duration">00:00</strong><span id="timerStatus">已运行</span></div><div id="testProgress" class="progress-area" hidden><div class="progress"><span id="progressFill"></span></div><div class="progress-meta"><span>45 分钟自然使用测试</span><span id="remaining">—</span></div></div><div class="session-metrics"><div><strong id="validCount">0</strong><span>接收会话 · 有效事件</span></div><div><strong id="range">—</strong><span>接收会话范围 · bpm</span></div></div></article>
+<article class="card session"><div class="card-top"><span id="timerLabel">接收运行时长</span><span class="small-label">本次接收</span></div><div class="timer"><strong id="duration">00:00</strong><span id="timerStatus">已运行</span></div><div id="testProgress" class="progress-area" hidden><div class="progress"><span id="progressFill"></span></div><div class="progress-meta"><span>45 分钟自然使用测试</span><span id="remaining">—</span></div></div><div class="session-metrics"><div><strong id="validCount">0</strong><span>有效心率事件</span></div><div><strong id="range">—</strong><span>本次范围 · bpm</span></div></div></article>
 </section>
-<section class="card chart-card"><div class="chart-header"><div><h2>心率变化</h2><p>仅绘制有效心率事件，空档不补值</p></div><div class="switch" aria-label="趋势时间范围"><button id="window10" aria-pressed="true" class="selected" type="button">近 10 分钟</button><button id="windowAll" aria-pressed="false" type="button">本次全部</button></div></div><div class="chart-wrap"><svg id="chart" viewBox="0 0 1000 235" role="img" aria-label="本次真实心率趋势"></svg><p id="emptyChart">佩戴手表并连接后，趋势会显示在这里。</p></div><div class="chart-foot"><span id="chartNote">横轴按电脑收到事件的时间显示</span><span>无效或过期时停止显示当前值</span></div></section>
-<section class="card data-access" aria-labelledby="dataAccessTitle">
-<div class="chart-header"><div><h2 id="dataAccessTitle">按需读取手表</h2><p id="dataSummary">准备电脑服务，再在手表开启待命通道；正在读取已保存设置。</p></div><span class="badge">独立 Wi-Fi 通道</span></div>
-<div class="capability-controls">
+<section class="card capability-controls control-panel" aria-labelledby="controlsTitle">
+<div class="section-heading"><h2 id="controlsTitle">连接与开关</h2><span class="section-note">心率和交互独立控制 · 两端同步</span></div>
+<div class="control-grid">
+<article class="control-tile"><div class="control-label"><span class="control-index">01</span><h3>手表连接</h3><span id="connectionBadge" class="badge">读取中</span></div><p id="stageConnectionState" role="status">正在读取连接状态…</p><div class="control-buttons"><button type="button" id="stageConnect" data-connection-action="start">开启连接</button><button type="button" id="stageDisconnect" data-connection-action="stop">断开连接</button></div><details class="plain-details"><summary>连接方式</summary><form id="connectionModeForm"><label>优先方式<select id="connectionMode"><option value="auto_bluetooth">自动 · 蓝牙优先</option><option value="auto_wifi">自动 · Wi-Fi优先</option><option value="rfcomm">仅蓝牙</option><option value="wifi">仅Wi-Fi</option></select></label><button type="submit">保存并连接</button></form><p>方式自动保存，断线后等待恢复或尝试备用方式。</p></details></article>
+<article class="control-tile"><div class="control-label"><span class="control-index">02</span><h3>连续心率</h3><span id="heartBadge" class="badge">读取中</span></div><p id="stageHeartState" role="status">心率广播状态尚未读取</p><button type="button" id="stageHeartToggle" data-connection-action="heart_broadcast_on">开启心率广播</button><details class="plain-details"><summary>仅控制电脑接收</summary><p>暂停只停止电脑接收，手表仍可采集；关闭广播会同步停止采集。</p><button type="button" id="stageReceiveToggle" data-connection-action="heart_receive_off">仅暂停电脑心率接收</button></details></article>
+<article class="control-tile"><div class="control-label"><span class="control-index">03</span><h3>读取与提醒</h3><span id="agentBadge" class="badge">读取中</span></div><p id="stageAgentState" role="status">交互状态尚未读取</p><button type="button" id="stageAgentToggle" data-connection-action="agent_on">开启 Agent 交互</button><p class="control-help">开启后可按需读取、发送提醒。关闭交互时，连接与连续心率继续运行。</p></article>
+</div><p id="stageConnectionMessage" role="status" aria-live="polite"></p></section>
+</section>
+<section id="deviceData" data-page-panel="device" hidden class="card data-access" aria-labelledby="dataAccessTitle">
+<div class="chart-header"><div><h2 id="dataAccessTitle">按需读取手表</h2><p id="dataSummary">连接后开启Agent交互；正在读取已保存设置。</p></div><a class="text-link" href="#preferences">读取设置 ↗</a></div>
+<div class="capability-controls" hidden>
 <div class="capability-summary"><strong id="capabilityPcState">正在检查电脑服务…</strong><span id="capabilityPcTime"></span></div>
 <button id="capabilityStart" type="button">开启电脑按需服务</button><button id="capabilityStop" type="button" disabled>停止电脑按需服务</button>
 <form id="capabilitySettings"><label><input id="capabilityAutoStart" type="checkbox">下次用01启动时准备按需服务</label><button type="submit">保存启动偏好</button></form>
 <p id="capabilityMessage" role="status" aria-live="polite"></p>
-<p class="muted">启动偏好不会立即开启或停止服务。停止电脑按需服务会尝试关闭手表待命，心率广播继续由左侧按钮控制。</p>
+<p class="muted">启动偏好不会立即开启或停止服务。停止电脑按需服务会尝试关闭手表待命，心率广播继续由总览页的独立开关控制。</p>
 </div>
-<section class="receiver-settings capability-duration" aria-labelledby="capabilityDurationTitle">
-<div><h2 id="capabilityDurationTitle">电脑按需服务时长</h2><p>保存后立即生效；限时从本次保存开始计时。下次启动沿用已保存的时长。</p></div>
-<form id="capabilityDurationForm">
-<label class="unlimited-option"><input id="capabilityUnlimited" type="checkbox" checked> 不限时</label>
-<label>限制时长 <input id="capabilityAmount" type="number" value="60" min="0.0003" step="any" inputmode="decimal" disabled required aria-label="电脑按需服务限制时长数值"></label>
-<select id="capabilityUnit" aria-label="电脑按需服务时长单位" disabled><option value="minutes">分钟</option><option value="hours">小时</option></select>
-<button id="capabilityDurationSave" type="submit" disabled>保存设置</button>
-</form><p id="capabilityLimitStatus" role="status">正在读取电脑服务时长…</p><p id="capabilityDurationMessage" role="status" aria-live="polite"></p>
-<p class="receiver-note">保存立即生效，电脑服务未运行时只保存。手表可勾选并保存“跟随电脑设置”，连接后自动同步电脑剩余时间；不勾选则独立计时（默认30分钟，也可不限时）。到时结束按需连接，心率广播独立运行。</p>
-</section>
-<details class="data-settings"><summary>数据读取设置</summary><form id="dataSettingsForm">
-<div class="data-setting-fields">
-<label>每次采集时长（秒）<input id="dataSeconds" type="number" min="1" max="10" step="1" value="4" required></label>
-<label>测量完成后的间隔（秒）<input id="dataCooldown" type="number" min="15" max="300" step="1" value="15" required></label>
-<label>心率接收有效期（秒）<input id="dataHeartAge" type="number" min="1" max="30" step="1" value="30" required></label>
-<label>电量与状态可复用多久（秒）<input id="dataStatusCache" type="number" min="0" max="300" step="1" value="15" required></label>
-<label>气压与运动可复用多久（秒）<input id="dataSensorCache" type="number" min="0" max="300" step="1" value="0" required></label>
-</div><fieldset class="data-metrics"><legend>允许通过按需按钮和Agent读取</legend>
-<label><input type="checkbox" data-metric="heart_rate" checked>心率缓存</label><label><input type="checkbox" data-metric="device_status" checked>电量与状态</label><label><input type="checkbox" data-metric="pressure" checked>气压</label><label><input type="checkbox" data-metric="accelerometer" checked>加速度</label><label><input type="checkbox" data-metric="gyroscope" checked>陀螺仪</label>
-</fieldset><p class="muted">复用时间设为0时，每次请求重新读取。设置同时约束网页与Agent；原心率广播和实时图继续独立运行。保存后用于后续读取，进行中的测量不被重新计时；电脑服务期限在上方单独设置。</p>
-<button id="dataSettingsSave" type="submit">保存读取设置</button><p id="dataSettingsMessage" role="status" aria-live="polite"></p>
-</form></details>
-<label class="data-fresh"><input id="dataFresh" type="checkbox">这次重新读取，不复用最近结果</label>
-<div class="data-actions"><button type="button" data-tool="get_device_status">查询电量与状态</button><button type="button" data-tool="measure_pressure">读取一次气压</button><button type="button" data-tool="measure_motion" data-kind="accelerometer">采集加速度</button><button type="button" data-tool="measure_motion" data-kind="gyroscope">采集陀螺仪</button></div>
-<div class="data-active"><span id="dataActiveState">当前没有测量</span><button id="dataCancel" type="button" disabled>取消当前测量</button></div>
-<p id="dataMessage" role="status">这些接口默认不连续采集。页面刷新只读取电脑缓存。</p>
+<label class="data-fresh"><input id="dataFresh" type="checkbox">本次重新读取（跳过缓存）</label>
+<div class="data-actions"><button type="button" data-tool="get_device_status">查询电量与状态</button><button type="button" data-tool="measure_heart_rate">测一次心率（最多15秒）</button><button type="button" data-tool="measure_pressure">读取一次气压</button><button type="button" data-tool="measure_motion" data-kind="accelerometer">采集加速度</button><button type="button" data-tool="measure_motion" data-kind="gyroscope">采集陀螺仪</button></div>
+<div class="data-active"><span id="dataActiveState">当前没有测量</span><button id="dataCancel" type="button" disabled>取消全部进行中的采集</button></div>
+<div id="dataActiveRequests" class="data-request-list" aria-live="polite"></div>
+<p id="dataMessage" role="status">点击各项独立读取；刷新页面只查看已保存结果。</p>
 <p id="dataConnection" role="status">接口连接状态尚未读取。</p>
-<div class="data-grid"><article><span>电量 · 充电状态</span><strong id="dataBattery">—</strong><small id="dataBatteryAge">尚未查询</small></article><article><span>气压 · hPa</span><strong id="dataPressure">—</strong><small id="dataPressureAge">尚未采集</small></article><article><span>最近运动原始采样</span><strong id="dataMotion">—</strong><small id="dataMotionValues">手表 X / Y / Z 轴</small><small id="dataMotionAge">尚未采集</small></article></div>
-<p class="muted">气压显示保存样本的均值；加速度包含重力，运动采样不换算步数。定位、计步、佩戴状态、血氧和心电尚未验证可用。接入 Agent 后，工具结果可能发送给你使用的模型服务。</p>
+<div class="data-grid" aria-label="最近一次读取结果"><article><span>一次性心率 · bpm</span><strong id="dataOnceHeart">—</strong><small id="dataOnceHeartAge">尚未测量</small><small id="dataResult_heart_rate" role="status"></small></article><article><span>电量 · 充电状态</span><strong id="dataBattery">—</strong><small id="dataBatteryAge">尚未查询</small><small id="dataResult_device_status" role="status"></small></article><article><span>气压 · hPa</span><strong id="dataPressure">—</strong><small id="dataPressureAge">尚未采集</small><small id="dataResult_pressure" role="status"></small></article><article><span>加速度 · m/s²</span><strong id="dataAccelerometer">—</strong><small id="dataAccelerometerValues">手表 X / Y / Z 轴</small><small id="dataAccelerometerAge">尚未采集</small><small id="dataResult_accelerometer" role="status"></small></article><article><span>陀螺仪 · rad/s</span><strong id="dataGyroscope">—</strong><small id="dataGyroscopeValues">手表 X / Y / Z 轴</small><small id="dataGyroscopeAge">尚未采集</small><small id="dataResult_gyroscope" role="status"></small></article></div>
+<details class="plain-details"><summary>数据含义与使用范围</summary><p class="muted">气压显示保存样本的均值；加速度包含重力，运动采样不换算步数。定位、计步、佩戴状态、血氧和心电尚未验证可用。接入 Agent 后，工具结果可能发送给你使用的模型服务。</p></details>
 </section>
-<section class="bottom-grid"><article class="card connection"><div class="card-top"><h2>连接状态</h2><span id="connectionDot" class="dot"></span></div><dl><div><dt>手表 → 电脑</dt><dd id="link">等待连接</dd></div><div><dt>最后收包</dt><dd id="packetAge">—</dd></div><div><dt>接收 / 序号空缺</dt><dd id="packets">0 / 0</dd></div><div><dt>连接次数 / 断开次数</dt><dd id="connections">0 / 0</dd></div></dl><p id="network" class="muted">—</p></article><article class="card notes"><h2>这一页如何记录</h2><p>手表收到传感器事件的时间作为近似测量时间。状态心跳只表示连接仍在工作，不会生成新的心率点。</p><p>超过 30 秒没有新心率、无接触或连接断开时，当前值显示横线。关闭或刷新本页不会停止手表采集。</p><div class="note-footer"><span>测量时间未经独立标定 · 非医疗用途</span><span id="runId">尚无会话</span></div></article></section>
-</section>
-<section id="historyView" role="tabpanel" aria-labelledby="viewHistory" hidden>
+<section id="heartTrend" data-page-panel="heart-trend" hidden class="card chart-card"><div class="chart-header"><div><h2>心率变化</h2><p>仅绘制有效心率事件，空档不补值</p></div><div class="switch" aria-label="趋势时间范围"><button id="window10" aria-pressed="true" class="selected" type="button">近 10 分钟</button><button id="windowAll" aria-pressed="false" type="button">本次全部</button></div></div><div class="chart-wrap"><svg id="chart" viewBox="0 0 1000 235" role="img" aria-label="本次真实心率趋势"></svg><p id="emptyChart">佩戴手表并连接后，趋势会显示在这里。</p></div><div class="chart-foot"><span id="chartNote">横轴按电脑收到事件的时间显示</span><span>无效或过期时停止显示当前值</span></div></section>
+<section id="historyView" data-page-panel="heart-history" aria-label="心率历史" hidden>
 <section class="card history-browser">
 <div class="history-heading"><div><h2>历史记录</h2><p>按北京时间（UTC+8）的电脑接收日期分类；桌面小窗仍显示当前采集。</p></div><button id="historyRefresh" type="button">刷新记录</button></div>
 <div class="history-filters"><label>年份<select id="historyYear" aria-label="年份"></select></label><label>月份<select id="historyMonth" aria-label="月份"></select></label><label>日期<select id="historyDay" aria-label="日期"></select></label><a id="historyExport" class="download" hidden download>导出所选记录 ↗</a></div>
@@ -77,5 +64,88 @@
 <div class="history-table-wrap"><table class="history-table"><caption>所选日期范围内的采集记录</caption><thead><tr><th scope="col">轮次</th><th scope="col">本范围内记录时间</th><th scope="col">有效 / 心率事件</th><th scope="col">操作</th></tr></thead><tbody id="historyRunRows"></tbody></table></div>
 <p id="historyRunLimit" class="history-note"></p>
 </div></section></section>
-<footer><span>本地接收器独立运行 · 停止采集请在手表操作</span><span id="serviceNote">读取中</span></footer>
-</main><script src="/app.js"></script><script src="/history.js"></script><script src="/data.js"></script></body></html>
+<section id="sendReminder" data-page-panel="reminders" hidden class="card reminder-panel" aria-labelledby="reminderTitle">
+<div class="section-heading"><div><p class="eyebrow">REMINDERS</p><h2 id="reminderTitle">发送手表提醒</h2></div><span class="badge">支持回执</span></div><p>与设备读取共用<a class="text-link" href="#overview">总览与连接</a>中的 Agent 交互开关。发送前须连接并确认交互已开启；没有回执时不会自动重发。</p><p id="reminderReady" role="status">正在检查提醒发送条件…</p>
+<details class="data-settings"><summary>用户提醒限制 · 双端同步</summary>
+<form id="reminderPolicyForm"><div class="data-setting-fields">
+<label><input id="policyVibrate" type="checkbox" checked>允许振动</label>
+<label>整组振动上限（1～10秒，含间隔）<input id="policyVibrationSeconds" type="number" min="1" max="10" step="0.1" value="6" required><small>默认6秒，每次可调整0.1秒</small></label>
+<label><input id="policyWake" type="checkbox" checked>允许自动亮屏</label>
+<label><input id="policySound" type="checkbox">允许声音提醒</label>
+<label>提醒页面显示上限（5～30秒）<input id="policyScreenSeconds" type="number" min="5" max="30" step="1" value="30" required><small>整数秒，默认30秒</small></label>
+</div><p>这些设置由你控制，Agent只能在限额内请求。修改会结束正在执行的提醒；不会开启交互或心率。页面到时退出，之后息屏由系统决定。声音默认关闭，开启后仍须逐条勾选。</p>
+<p id="policyValidation" role="status"></p><button id="policySave" type="submit">保存提醒限制</button><p id="policyStatus" role="status"></p></form></details>
+<form id="reminderForm">
+<div class="data-setting-fields">
+<label>标题（最多60字）<input id="reminderHeading" maxlength="120" required value="温馨提醒"></label>
+<label>模板<select id="reminderTemplate"><option value="strong">强档（默认）</option><option value="standard">标准</option><option value="light">轻档</option><option value="silent">静默亮屏</option><option value="notification_only">仅通知</option></select><small>选择后填入默认参数，下方可直接修改</small></label>
+</div>
+<label class="reminder-body">正文（最多500字，可滚动）<textarea id="reminderBody" rows="4" maxlength="1000" required placeholder="输入提醒内容"></textarea></label>
+<div class="reminder-options"><label><input id="reminderSound" type="checkbox"> 声音</label><label><input id="reminderVibrate" type="checkbox" checked> 振动</label><label><input id="reminderScreen" type="checkbox" checked> 亮屏显示</label><label>有效期（1～300秒）<input id="reminderTtl" type="number" min="1" max="300" step="1" value="60" required></label></div>
+<p id="reminderEffects" role="status"></p><p>声音使用手表系统默认提示音，播放一次，最多3秒，音量跟随系统通知设置；静音、勿扰及音量为零时不发声。</p>
+<details class="data-settings"><summary>自定义振动与显示</summary>
+<p>本条启用振动时可直接输入数值，无需另外开启“覆盖模板”。关闭某种效果后，其参数停用且不提交。</p>
+<div class="data-setting-fields">
+<label>每次振动（20～1000毫秒）<input id="reminderPulse" type="number" min="20" max="1000" step="1" value="360" required disabled></label>
+<label>振动次数（1～8次）<input id="reminderCount" type="number" min="1" max="8" step="1" value="2" required disabled></label>
+<label>两次之间的间隔（0～2000毫秒）<input id="reminderGap" type="number" min="0" max="2000" step="1" value="220" required disabled></label>
+<label>请求振幅（1～255）<input id="reminderAmplitude" type="number" min="1" max="255" step="1" value="255" required disabled></label>
+<label>本条页面显示时长（5～30秒）<input id="reminderScreenSeconds" type="number" min="5" max="30" step="1" value="15" required disabled><small id="reminderScreenRange">还须服从你保存的显示上限</small></label>
+</div><p id="reminderPatternStatus" role="status" aria-live="polite"></p><p id="reminderValidation" role="status" aria-live="polite"></p>
+<p>整组时长＝每次时长×次数＋间隔×（次数−1），默认上限6秒，用户可设1～10秒。上方数值均为整数；实际振幅取决于手表支持情况。静音时可执行已许可的振动和亮屏，勿扰及锁屏仍可能限制效果。声音另由上方的声音选项控制。</p></details>
+<div class="data-actions"><button id="reminderSend" type="submit">发送提醒</button><button id="reminderRefresh" type="button" disabled>向手表核对回执</button></div>
+<details class="plain-details"><summary>回执怎么查看</summary><p class="reminder-help">核对回执：主动查询最近这条提醒在手表上的显示和“知道了”记录，需要连接且开启Agent交互；不会重新发送、再次发声、振动或亮屏。平时下方自动显示电脑已保存的回执，结果不确定时可补查。</p></details>
+</form><p id="reminderMessage" role="status" aria-live="polite"></p><pre id="reminderReceipt" aria-live="polite"></pre>
+</section>
+<section id="reminderHistoryView" data-page-panel="reminder-history" aria-label="提醒历史" hidden>
+<section class="card reminder-history-browser">
+<div class="history-heading"><div><h2>电脑保留的全部提醒</h2><p id="reminderHistoryCapacity">正在读取提醒账本…</p></div><button id="reminderHistoryRefresh" type="button">刷新历史</button></div>
+<p class="history-note">手表删除后，这里保留原始发送内容，并标明“手表已删除”。两端各最多保留128条；满额时新提醒替换已过期记录。这里不包含已被替换的旧记录。</p>
+<form id="reminderHistoryFilters" class="reminder-history-filters" role="search">
+<label class="reminder-search">搜索标题、正文或编号<input id="reminderHistoryQuery" type="search" maxlength="200" placeholder="输入关键词"></label>
+<label>提醒状态<select id="reminderHistoryStatus"><option value="">全部状态</option></select></label><button type="submit">筛选</button><button id="reminderHistoryReset" type="button">清除</button></form>
+<p id="reminderSyncState" class="sync-state" role="status"></p>
+<p id="reminderHistoryMessage" class="history-message" role="status" aria-live="polite">进入本页后读取电脑记录，不会重新发送提醒。</p>
+<div id="reminderHistoryList" class="reminder-history-list"></div>
+<div class="history-pagination"><button id="reminderHistoryPrevious" type="button">上一页</button><span id="reminderHistoryPage" aria-live="polite"></span><button id="reminderHistoryNext" type="button">下一页</button></div>
+</section></section>
+<section id="settingsView" data-page-panel="settings" aria-label="设置与小窗" hidden>
+<div id="preferences" class="card preferences"><div class="section-heading"><h2>设置与桌面小窗</h2><span class="section-note">保存后按原有规则生效</span></div><div class="preferences-body"><section class="card receiver-settings" aria-labelledby="receiverSettingsTitle">
+<div><h2 id="receiverSettingsTitle">接收时长</h2><p>保存后立即生效；限时从本次保存开始计时。下次启动沿用已保存的时长。</p></div>
+<form id="receiverSettingsForm">
+<label class="unlimited-option"><input id="receiverUnlimited" type="checkbox" checked> 不限时</label>
+<label>限制时长 <input id="receiverAmount" type="number" value="60" min="0.0003" step="any" inputmode="decimal" disabled required aria-label="限制时长数值"></label>
+<select id="receiverUnit" aria-label="时长单位" disabled><option value="minutes">分钟</option><option value="hours">小时</option></select>
+<button id="receiverSave" type="submit" disabled>保存设置</button>
+</form><p id="receiverLimitStatus" role="status">正在读取接收设置…</p><p id="receiverSettingsMessage" role="status"></p>
+<p class="receiver-note">到时只暂停电脑接收；手表仍可能采集，可在任一端关闭心率广播。接收暂停时保存设置不会自动恢复。</p>
+</section>
+<section class="receiver-settings capability-duration" aria-labelledby="capabilityDurationTitle">
+<div><h2 id="capabilityDurationTitle">电脑 Agent 交互时长</h2><p>保存后立即生效；限时从本次保存开始计时。下次开启沿用已保存的时长。</p></div>
+<form id="capabilityDurationForm">
+<label class="unlimited-option"><input id="capabilityUnlimited" type="checkbox" checked> 不限时</label>
+<label>限制时长 <input id="capabilityAmount" type="number" value="60" min="0.0003" step="any" inputmode="decimal" disabled required aria-label="电脑按需服务限制时长数值"></label>
+<select id="capabilityUnit" aria-label="电脑按需服务时长单位" disabled><option value="minutes">分钟</option><option value="hours">小时</option></select>
+<button id="capabilityDurationSave" type="submit" disabled>保存设置</button>
+</form><p id="capabilityLimitStatus" role="status">正在读取电脑服务时长…</p><p id="capabilityDurationMessage" role="status" aria-live="polite"></p>
+<p class="receiver-note">运行中保存会同步新期限；关闭时只保存本端下次开启的偏好。到时关闭交互并取消在途任务，基础连接和连续心率保留。离线显示待同步，重连不续期。</p>
+</section>
+<details class="data-settings"><summary>数据读取设置</summary><form id="dataSettingsForm">
+<div class="data-setting-fields">
+<label>每次采集时长（秒）<input id="dataSeconds" type="number" min="1" max="10" step="1" value="4" required></label>
+<label>同一指标再次采集的间隔（秒，0为不等待）<input id="dataCooldown" type="number" min="0" max="300" step="1" value="0" required></label>
+<label>心率接收有效期（秒）<input id="dataHeartAge" type="number" min="1" max="30" step="1" value="30" required></label>
+<label>电量与状态可复用多久（秒）<input id="dataStatusCache" type="number" min="0" max="300" step="1" value="15" required></label>
+<label>气压与运动可复用多久（秒）<input id="dataSensorCache" type="number" min="0" max="300" step="1" value="0" required></label>
+</div><fieldset class="data-metrics"><legend>允许通过按需按钮和Agent读取</legend>
+<label><input type="checkbox" data-metric="heart_rate" checked>心率缓存</label><label><input type="checkbox" data-metric="device_status" checked>电量与状态</label><label><input type="checkbox" data-metric="pressure" checked>气压</label><label><input type="checkbox" data-metric="accelerometer" checked>加速度</label><label><input type="checkbox" data-metric="gyroscope" checked>陀螺仪</label>
+</fieldset><p class="muted">复用时间设为0时，每次请求重新读取。设置同时约束网页与Agent；原心率广播和实时图继续独立运行。保存后用于后续读取，进行中的测量不被重新计时；电脑服务期限在上方单独设置。</p>
+<button id="dataSettingsSave" type="submit">保存读取设置</button><p id="dataSettingsMessage" role="status" aria-live="polite"></p>
+</form></details>
+<section class="desktop-controls" aria-label="桌面小窗"><div><strong>放到桌面上</strong><span>每个小窗可单独显示、固定；固定后整窗点击穿透</span></div><div class="widget-control-pair"><button id="widgetCurrent" type="button" aria-pressed="false">显示桌面心率</button><button id="widgetCurrentLock" type="button" aria-pressed="false">固定心率窗</button></div><div class="widget-control-pair"><button id="widgetTrend" type="button" aria-pressed="false">显示桌面曲线</button><button id="widgetTrendLock" type="button" aria-pressed="false">固定曲线窗</button></div><p id="widgetMessage" role="status"></p></section>
+</div></div>
+<details class="diagnostics"><summary>连接详情与记录说明</summary><section class="bottom-grid"><article class="card connection"><div class="card-top"><h2>连接状态</h2><span id="connectionDot" class="dot"></span></div><dl><div><dt>手表 → 电脑</dt><dd id="link">等待连接</dd></div><div><dt>最后收包</dt><dd id="packetAge">—</dd></div><div><dt>接收 / 序号空缺</dt><dd id="packets">0 / 0</dd></div><div><dt>连接次数 / 断开次数</dt><dd id="connections">0 / 0</dd></div></dl><p id="network" class="muted">—</p></article><article class="card notes"><h2>这一页如何记录</h2><p>手表收到传感器事件的时间作为近似测量时间。状态心跳只表示连接仍在工作，不会生成新的心率点。</p><p>超过 30 秒没有新心率、无接触或连接断开时，当前值显示横线。关闭或刷新本页不会停止手表采集。</p><div class="note-footer"><span>测量时间未经独立标定 · 非医疗用途</span><span id="runId">尚无会话</span></div></article></section></details>
+</section>
+</div></div>
+<footer><span>广播可在任一端关闭 · 仅暂停电脑接收不会停止手表采集</span><span id="serviceNote">读取中</span></footer>
+</main><script src="/app.js"></script><script src="/history.js"></script><script src="/data.js"></script><script src="/connection.js"></script><script src="/reminders.js"></script><script src="/reminder-history.js"></script><script src="/navigation.js"></script></body></html>

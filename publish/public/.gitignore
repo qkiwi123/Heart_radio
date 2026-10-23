@@ -25,3 +25,4 @@ FINAL-ACCEPTANCE.md
 *.jsonl
 *.sqlite
 *.db
+dist/

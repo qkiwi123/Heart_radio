@@ -39,19 +39,19 @@ class DataAccessTests(unittest.TestCase):
         self.state['connected'] = False
         self.assertEqual(self.access.call('get_heart_rate', {})['status'], 'disconnected')
 
-    def test_index_from_current_inventory_and_shared_cooldown(self):
+    def test_index_from_current_inventory_and_independent_metric(self):
         result = self.access.call('measure_pressure', dict(seconds=4))
         self.assertTrue(result['ok'])
         self.assertEqual(result['value'], 1001)
         self.assertEqual(self.calls[-1], ('sample', dict(sensorId=21, seconds=4)))
-        self.assertEqual(self.access.call('measure_motion', {})['status'], 'rate_limited')
+        self.assertEqual(self.access.call('measure_motion', {})['status'], 'not_available')
         cache = DataAccess(self.directory.name, lambda: self.state, self.bridge, lambda: self.connection).cached()
         self.assertEqual(cache['measurements']['pressure']['value'], 1001)
 
     def test_mismatched_sensor_and_unreleased_lock_hide_values(self):
         self.result['sensor']['type'] = 65536
         self.assertEqual(self.access.call('measure_pressure', {})['status'], 'sensor_mismatch')
-        self.access.last_measure_end = float('-inf')
+        self.access.last_measure_end.clear()
         self.result['sensor']['type'] = 6
         self.result['requestWakeLockHeldAtResult'] = True
         result = self.access.call('measure_pressure', {})

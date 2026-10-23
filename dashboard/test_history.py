@@ -53,6 +53,12 @@ class HistoryTest(unittest.TestCase):
         selected=self.query(year=2026,month=9,day=26,run=run)
         self.assertEqual(selected['statistics']['validCount'],1);self.assertEqual(len(selected['runs']),2)
 
+    def test_bluetooth_capture_identities_separate_history_segments(self):
+        self.write('20261020-120000-001',[event('2026-10-20T12:00:00',session='attempt-a'),event('2026-10-20T12:00:01',session='attempt-b')])
+        result=self.query(year=2026,month=10,day=20)
+        self.assertEqual(result['statistics']['validCount'],2)
+        self.assertNotEqual(result['points'][0]['segment'],result['points'][1]['segment'])
+
     def test_incremental_partial_lines_restart_and_replacement(self):
         run='20260926-120000-001';path=self.write(run,[event('2026-09-26T12:00:00')])
         self.assertEqual(self.query(year=2026)['statistics']['validCount'],1)

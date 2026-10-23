@@ -14,12 +14,13 @@ import threading
 import time
 import uuid
 from control import Deadline, read_settings
+from diagnostic_log import DiagnosticLog
 
 from lan import LanAdapter, private_ipv4
 from discovery import Discovery, discovery_socket
 
 MAX_FRAME = 65536
-OPS = {'inventory', 'status', 'sample', 'cached_location', 'locate', 'cancel'}
+OPS = {'inventory', 'status', 'sample','heart_sample','motion_window', 'cached_location', 'locate', 'cancel','control_state','select_transport','stop_bridge','sync_interaction','sync_broadcast','sync_reminder_policy','remind','reminder_status'}
 
 
 def frame(value):
@@ -45,10 +46,26 @@ def validate_request(value):
     params = value.get('params', {})
     if not isinstance(params, dict):
         raise ValueError('params must be an object')
-    allowed = {'sample': {'sensorId', 'seconds', 'periodUs'}, 'locate': {'provider', 'seconds'},
-               'cancel': {'targetId'}}.get(value['op'], set())
+    from reminder_protocol import FIELDS,normalize,validate_status
+    allowed = {'remind':FIELDS,'reminder_status':{'reminderId'},'sample': {'sensorId', 'seconds', 'periodUs'}, 'locate': {'provider', 'seconds'},
+               'heart_sample':{'sensorId','seconds'},'motion_window':{'sensorId','seconds'},'cancel': {'targetId'},'select_transport':{'selectionId'},'sync_interaction':{'selectionId','syncId','state'},'sync_broadcast':{'selectionId','syncId','state'},'sync_reminder_policy':{'selectionId','syncId','state'}}.get(value['op'], set())
     if set(params) - allowed:
         raise ValueError('Unknown parameters')
+    if value['op']=='motion_window':
+        from motion_protocol import validate_motion_window
+        validate_motion_window(params)
+    if value['op']=='remind':params=normalize(params)
+    if value['op']=='reminder_status':validate_status(params)
+    if value['op'] in ('sync_interaction','sync_broadcast'):
+        from interaction_sync import validate_wire
+        if set(params)!=allowed or any(not isinstance(params[k],str) or not re.fullmatch('[0-9a-f]{32}',params[k]) for k in ('selectionId','syncId')):raise ValueError('Invalid sync identity')
+        validate_wire(params['state'])
+        if value['op']=='sync_broadcast' and any(e and e['ttlMs'] is not None for e in params['state'].values()):raise ValueError('Broadcast switch has no lease')
+    if value['op']=='sync_reminder_policy':
+        from reminder_policy import validate_wire
+        if set(params)!=allowed or any(not isinstance(params[k],str) or not re.fullmatch('[0-9a-f]{32}',params[k]) for k in ('selectionId','syncId')):raise ValueError('Invalid policy sync identity')
+        validate_wire(params['state'])
+    if value['op']=='heart_sample' and (set(params)!=allowed or type(params['sensorId']) is not int or type(params['seconds']) is not int or not 1<=params['seconds']<=15):raise ValueError('Invalid heart sample')
     if value['op'] == 'sample' and type(params.get('sensorId')) is not int:
         raise ValueError('sensorId must be an integer')
     for key, low, high in [('seconds', 1, 180 if value['op'] == 'locate' else 60), ('periodUs', 100000, 1000000)]:
@@ -58,6 +75,7 @@ def validate_request(value):
         raise ValueError('Unknown location provider')
     if 'targetId' in params and (not isinstance(params['targetId'], str) or len(params['targetId']) > 64):
         raise ValueError('Invalid targetId')
+    if value['op']=='select_transport' and not re.fullmatch('[0-9a-f]{32}',str(params.get('selectionId',''))):raise ValueError('Invalid selection identity')
     if value['op'] == 'cancel' and not re.fullmatch('[A-Za-z0-9_-]{1,64}', str(params.get('targetId', ''))):
         raise ValueError('Targeted cancellation requires targetId')
     result = dict(op=value['op'], params=params)
@@ -75,6 +93,8 @@ class Bridge:
         self.deadline = None
         self.duration_limit = None
         self.duration_sync_sent = None
+        self.connection_only=False
+        self.reminder_receipts={}
         self.listen_host = None
         self.writer = None
         self.pending = {}
@@ -86,7 +106,7 @@ class Bridge:
         self.last_disconnect_reason = None
         self.watch_lifecycle = None
         self.watch_reported_ms = None
-        self.log_file = log_path.open('x', encoding='utf-8', buffering=1)
+        self.log_file = DiagnosticLog(log_path)
         self.write_lock = asyncio.Lock()
 
     def log(self, kind, **fields):
@@ -95,6 +115,9 @@ class Bridge:
 
     def state(self):
         return dict(status='connected' if self.writer else 'watch_offline', connected=self.writer is not None,
+                    diagnosticLogError=getattr(self.log_file,'error',None),
+                    connectionOnly=self.connection_only,
+                    reminderReceipts=list(self.reminder_receipts.values()),
                     instanceId=self.instance_id,
                     serverRemainingSeconds=max(0, self.deadline - time.monotonic()) if self.deadline is not None else None,
                     serverLimit=self.duration_limit.fields() if self.duration_limit else None,
@@ -115,6 +138,7 @@ class Bridge:
                                  report.get('durationSyncInstanceId') == self.instance_id))
 
     async def sync_duration(self, expected_writer=None):
+        if self.connection_only:return
         writer = expected_writer or self.writer
         report = self.watch_lifecycle or {}
         if report.get('followComputer') is not True:
@@ -167,7 +191,7 @@ class Bridge:
             return dict(status='busy')
         if value['op'] == 'cancel':
             target = value['params']['targetId']
-            if target not in self.pending or self.pending[target].done() or self.pending_operations.get(target) not in ('sample', 'locate'):
+            if target not in self.pending or self.pending[target].done() or self.pending_operations.get(target) not in ('sample', 'heart_sample', 'motion_window', 'locate'):
                 return dict(status='not_active')
         request_id = value.pop('requestId', None) or uuid.uuid4().hex
         if request_id in self.pending: return dict(status='duplicate_request')
@@ -187,14 +211,13 @@ class Bridge:
             self.log('remote_result', op=value['op'], result=result)
             return result
         except asyncio.TimeoutError:
-            try:
-                await self.send(dict(id=uuid.uuid4().hex, op='cancel', params=dict(targetId=request_id)), writer)
-            except (ConnectionError, OSError):
-                pass
+            if value['op'] in ('sample','heart_sample','motion_window','locate'):
+                try:await self.send(dict(id=uuid.uuid4().hex, op='cancel', params=dict(targetId=request_id)), writer)
+                except (ConnectionError, OSError):pass
             self.log('request_timeout', requestId=request_id)
-            return dict(status='request_timeout', id=request_id)
+            return dict(status='outcome_unknown_timeout' if value['op']=='remind' else 'request_timeout', id=request_id)
         except (ConnectionError, OSError) as error:
-            return dict(status='disconnected', id=request_id, error=type(error).__name__)
+            return dict(status='outcome_unknown_disconnected' if value['op']=='remind' else 'disconnected', id=request_id, error=type(error).__name__)
         finally:
             self.pending.pop(request_id, None)
             self.pending_operations.pop(request_id, None)
@@ -231,11 +254,17 @@ class Bridge:
             while True:
                 result = await asyncio.wait_for(read_frame(reader), 35)
                 request_id = result.get('id')
-                if request_id in ('bridge_session', 'standby_state') or str(request_id).startswith(('ping_', 'duration_set_')):
+                if result.get('event')=='reminder_receipt':
+                    identity=result.get('reminderId')
+                    if isinstance(identity,str) and re.fullmatch('[A-Za-z0-9_-]{1,64}',identity):
+                        self.reminder_receipts[identity]=result
+                        while len(self.reminder_receipts)>16:self.reminder_receipts.pop(next(iter(self.reminder_receipts)))
+                elif request_id in ('bridge_session', 'standby_state') or str(request_id).startswith(('ping_', 'duration_set_')):
                     if 'leaseRemainingMs' in result:
                         keys = ('state', 'reason', 'attempt', 'sessionId', 'leaseRemainingMs', 'retryAfterMs',
                                 'wallMs', 'elapsedMs', 'screenInteractive', 'leaseUnlimited', 'leaseDurationMs',
-                                'durationSyncVersion', 'followComputer', 'durationSyncRevision', 'durationSyncInstanceId')
+                                'durationSyncVersion', 'followComputer', 'durationSyncRevision', 'durationSyncInstanceId',
+                                'managedConnection','connectionControl','agentInteraction','heartRunning','heartRegistered','heartDiagnostic')
                         self.watch_lifecycle = {key: result.get(key) for key in keys}
                         self.watch_reported_ms = time.time_ns() // 1000000
                         if request_id == 'bridge_session':
@@ -349,7 +378,9 @@ async def run(args):
     settings = read_settings(settings_path) if settings_path else None
     seconds = args.seconds if args.seconds is not None else (settings['seconds'] if settings else 1800)
     bridge.duration_limit = Deadline(seconds, settings)
-    bridge.deadline = bridge.duration_limit.ends
+    connection_only=getattr(args,'connection_only',False)
+    bridge.connection_only=connection_only
+    bridge.deadline = None if connection_only else bridge.duration_limit.ends
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(args.directory / 'cert.pem', args.directory / 'key.pem')
@@ -400,14 +431,14 @@ async def run(args):
             if settings_path:
                 try:
                     if bridge.duration_limit.apply(read_settings(settings_path)):
-                        bridge.deadline = bridge.duration_limit.ends
+                        bridge.deadline = None if connection_only else bridge.duration_limit.ends
                         bridge.log('bridge_limit', **bridge.duration_limit.fields())
                         await bridge.sync_duration()
                     settings_error = False
                 except (OSError, ValueError, KeyError, TypeError):
                     if not settings_error: bridge.log('settings_error', reason='Unreadable duration settings; keeping previous limit')
                     settings_error = True
-            if bridge.duration_limit.expired(): break
+            if bridge.duration_limit.expired() and not connection_only: break
             if adapter and time.monotonic() >= next_network_check:
                 next_network_check = time.monotonic() + 5
                 try:
@@ -448,6 +479,7 @@ def main():
     parser.add_argument('--api-port', type=int, default=8768)
     parser.add_argument('--seconds', type=float, default=None)
     parser.add_argument('--settings', type=Path, help='live PC duration preferences; opt-in watch synchronization uses remaining time')
+    parser.add_argument('--connection-only',action='store_true',help='Keep transport ready; business permission is managed by the common data service')
     parser.add_argument('--instance-id', default=None)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--stop-file', type=Path, required=True)

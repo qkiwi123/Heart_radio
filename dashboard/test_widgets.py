@@ -31,6 +31,16 @@ class WidgetControlTest(unittest.TestCase):
                 self.assertEqual(send({'widget':'trend','locked':1})[0],400)
                 self.assertEqual(send({'widget':'trend','visible':False,'locked':False})[0],400)
                 self.assertEqual(server.widgets.status()['locked'],{'current':True,'trend':True})
+                payload={'widget':'trend','layout':{'left':200},'client_id':'a'*32,'sequence':1}
+                code,state=send(payload)
+                self.assertEqual(code,200);self.assertEqual(state['status'],'locked')
+                self.assertNotIn('left',state['layout']['trend'])
+                send({'widget':'trend','locked':False})
+                payload['sequence']=2
+                code,state=send(payload)
+                self.assertEqual(code,200);self.assertEqual(state['layout']['trend']['left'],200)
+                payload['layout']['locked']=True
+                self.assertEqual(send(payload)[0],400)
             finally:
                 httpd.shutdown();httpd.server_close();worker.join()
     def test_dashboard_locks_each_window_without_changing_visibility_or_layout(self):

@@ -18,7 +18,7 @@ import java.util.concurrent.LinkedBlockingDeque
 import javax.net.ssl.*
 
 /** Reuse the paired identity, try the saved address, then rediscover on Wi-Fi. */
-class WifiTransport(private val context: Context, private val config: WifiConfig) : BleTransport {
+class WifiTransport(private val context: Context, private val config: WifiConfig, private val heartAllowed:()->Boolean={true}) : BleTransport {
     private val handler = Handler(Looper.getMainLooper())
     private val queue = LinkedBlockingDeque<ByteArray>(8)
     private val socketLock = Any()
@@ -28,7 +28,7 @@ class WifiTransport(private val context: Context, private val config: WifiConfig
     private var discoverySocket: MulticastSocket? = null
     private var worker: Thread? = null
     private var sequence = 0
-    private val session = java.security.SecureRandom().nextInt()
+    private var session = java.security.SecureRandom().nextInt()
     private val heartbeat = object : Runnable {
         override fun run() {
             if (!active) return
@@ -41,6 +41,13 @@ class WifiTransport(private val context: Context, private val config: WifiConfig
             if (status != null) Probe.wifiStatus = status
             Probe.log(context, kind, fields)
         } }
+    }
+    fun isConnected() = active && ready
+    fun discardPending() { queue.clear() }
+    fun sessionId()=session.toLong() and 0xffffffffL
+    fun beginSelection(){
+        // A packet already in flight keeps its old session; the receiver can reject it.
+        session+=1;sequence=0;queue.clear()
     }
     override fun start() {
         if (active) return
@@ -143,6 +150,7 @@ class WifiTransport(private val context: Context, private val config: WifiConfig
     }
     override fun publish(kind: Int) {
         if (!active || !ready) return
+        if(kind==1&&!heartAllowed())return
         val st = Probe.state
         val packet = BlePacket.encode(kind, session, sequence++, st.lastWallMs,
             st.recentValue(SystemClock.elapsedRealtimeNanos()), st.accuracy, st.running, st.registered)

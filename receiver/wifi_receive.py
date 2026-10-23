@@ -30,7 +30,7 @@ async def run(args):
                        pcMonotonicNs=time.monotonic_ns(), **fields)
             line = json.dumps(row, ensure_ascii=False)
             out.write(line + '\n')
-            print(line, flush=True)
+            if kind!='packet':print(line, flush=True)  # Full packets already live in pc.jsonl.
 
         async def connected(reader, writer):
             nonlocal previous

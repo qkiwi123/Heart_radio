@@ -12,7 +12,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 BRANCH = 'codex/github-public'
 MESSAGE = 'Publish source-only HeartRadio snapshot'
-BLOCKED_PARTS = {'evidence', 'runs', '.local-wifi', '.venv', '.idea', '.git', '__pycache__', 'build', 'backups'}
+BLOCKED_PARTS = {'evidence', 'runs', '.local-wifi', '.venv', '.idea', '.git', '__pycache__', 'build', 'backups', 'dist'}
 BLOCKED_NAMES = {'local.properties', 'TEST-REPORT.md', 'INTEGRATION-REPORT.md', 'FINAL-ACCEPTANCE.md'}
 SECRET = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-(?:proj-)?[A-Za-z0-9_-]{40,}')
 
@@ -50,6 +50,24 @@ def scan(files):
         # Only the deliberately generated fixture is allowed as a data file.
         if name.endswith('.csv') and name != 'app/src/test/resources/synthetic-session.csv':
             raise ValueError(f'Unreviewed data fixture: {name}')
+
+
+def private_worktree_changes():
+    """Unpublished IDE/runtime changes need not be committed or temporarily stashed."""
+    rows=git('status','--porcelain=v1','-z','--untracked-files=all').split(b'\0')
+    names=[];index=0
+    while index<len(rows):
+        row=rows[index];index+=1
+        if not row:continue
+        names.append(row[3:].decode('utf-8'))
+        if row[:1] in (b'R',b'C') or row[1:2] in (b'R',b'C'):
+            names.append(rows[index].decode('utf-8'));index+=1
+    private=[]
+    for name in sorted(set(names)):
+        path=PurePosixPath(name)
+        if set(path.parts)&BLOCKED_PARTS or path.name in BLOCKED_NAMES:private.append(name)
+        else:raise ValueError('Commit publishable source changes first: '+name)
+    return private
 
 
 def public_parent(allowed):
@@ -94,8 +112,7 @@ def export(create_branch=False, author='HeartRadio <heartradio@users.noreply.git
     scan(files)
     parent = public_parent(set(files))
     source = git('rev-parse', 'HEAD').decode().strip()
-    if create_branch and git('status', '--porcelain').strip():
-        raise ValueError('Commit local source changes first; previews may be generated before committing')
+    private_changes=private_worktree_changes() if create_branch else []
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     directory = ROOT / 'runs' / f'github-public-{stamp}'
     directory.mkdir(parents=True, exist_ok=False)
@@ -106,6 +123,7 @@ def export(create_branch=False, author='HeartRadio <heartradio@users.noreply.git
     # These source links and audit details stay beside, never inside, the published tree.
     audit = dict(sourceCommit=source, preview=str(directory), files=len(files),
                  bytes=sum(map(len, files.values())), branch=BRANCH, parent=parent, pushed=False,
+                 privateUncommittedPaths=private_changes,
                  hashes={name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())})
     if create_branch:
         match = re.fullmatch(r'([^<>\r\n]+) <([^<>\s]+@users\.noreply\.github\.com)>', author)

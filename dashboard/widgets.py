@@ -1,10 +1,9 @@
 """Own two optional desktop displays; never control the receiver or the watch."""
 import os
-import json
 from pathlib import Path
 import subprocess
 import threading
-import uuid
+from widget_layout import LayoutStore
 
 
 class Widgets:
@@ -14,15 +13,12 @@ class Widgets:
         self.process=None
         self.desired={'current':False,'trend':False}
         self.lock=threading.RLock()
+        self.layout=LayoutStore(root)
 
     def locked_states(self):
         try:
-            saved=json.loads((self.root/'runs'/'widget-layout.json').read_text(encoding='utf-8-sig'))
-            return {name: saved.get(name,{}).get('locked',saved.get(name,{}).get('movementLocked',False)) is True
-                    for name in ('current','trend')}
-        except FileNotFoundError:
-            return {'current':False,'trend':False}
-        except (OSError,ValueError,AttributeError):
+            return self.layout.locked()
+        except OSError:
             # Layout is informational; dashboard visibility controls always remain available.
             return {'current':True,'trend':True}
 
@@ -31,7 +27,12 @@ class Widgets:
             running=self.process is not None and self.process.poll() is None
             if self.process is not None and not running:
                 self.desired={'current':False,'trend':False}
-            return dict(self.desired, running=running, locked=self.locked_states())
+            try: saved=self.layout.snapshot()
+            except OSError: saved=dict(layout={},revision=0,storageError=self.layout.error)
+            layout=saved['layout']
+            locked={name:layout.get(name,{}).get('locked',layout.get(name,{}).get('movementLocked',False)) is True for name in ('current','trend')}
+            if saved['storageError'] and not layout: locked={'current':True,'trend':True}
+            return dict(self.desired, running=running, locked=locked, **saved)
 
     def set_visible(self, widget, visible):
         if widget not in ('current','trend') or type(visible) is not bool:
@@ -55,22 +56,11 @@ class Widgets:
         if widget not in ('current','trend') or type(locked) is not bool:
             raise ValueError('无效的小窗固定参数')
         with self.lock:
-            path=self.root/'runs'/'widget-layout.json'
-            try:
-                saved=json.loads(path.read_text(encoding='utf-8-sig'))
-            except FileNotFoundError:
-                saved={}
-            if not isinstance(saved,dict) or not isinstance(saved.get(widget,{}),dict):
-                raise ValueError('小窗布局文件格式无效')
-            saved.setdefault(widget,{})['locked']=locked
-            path.parent.mkdir(parents=True,exist_ok=True)
-            temporary=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
-            try:
-                temporary.write_text(json.dumps(saved,ensure_ascii=False,separators=(',',':')),encoding='utf-8')
-                os.replace(temporary,path)
-            finally:
-                temporary.unlink(missing_ok=True)
+            self.layout.set_locked(widget,locked)
             return self.status()
+
+    def save_layout(self, widget, changes, client_id, sequence):
+        return self.layout.patch(widget,changes,client_id,sequence)
 
     def close(self):
         with self.lock:

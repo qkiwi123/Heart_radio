@@ -5,11 +5,11 @@ import threading
 import uuid
 
 METRICS = ('heart_rate', 'device_status', 'pressure', 'accelerometer', 'gyroscope')
-DEFAULTS = dict(measurementSeconds=4, measurementCooldownSeconds=15,
+DEFAULTS = dict(measurementSeconds=4, measurementCooldownSeconds=0,
                 heartMaxAgeSeconds=30, deviceStatusCacheSeconds=15,
                 sensorCacheSeconds=0,
                 allowedMetrics=list(METRICS))
-RANGES = dict(measurementSeconds=(1, 10), measurementCooldownSeconds=(15, 300),
+RANGES = dict(measurementSeconds=(1, 10), measurementCooldownSeconds=(0, 300),
               heartMaxAgeSeconds=(1, 30), deviceStatusCacheSeconds=(0, 300),
               sensorCacheSeconds=(0, 300))
 

@@ -25,10 +25,15 @@ function render(s){lastState=s;renderWidgets(s.widgets);renderReceiverLimit(s);t
  const obs=s.observation;const elapsed=s.elapsedSeconds??0;text('duration',duration(elapsed));$('testProgress').hidden=!obs;text('timerLabel',obs?'自然使用计时':'接收运行时长');text('timerStatus',s.receiverStopped?'已结束':'已运行');
  if(obs){const remain=obs.plannedSeconds-elapsed;$('progressFill').style.width=`${Math.min(100,Math.max(0,elapsed/obs.plannedSeconds*100))}%`;text('remaining',remain>0?`剩余 ${duration(remain)}`:'计划时间已到')}
  text('validCount',s.validCount.toLocaleString());text('range',s.minimum==null?'—':`${Math.round(s.minimum)}–${Math.round(s.maximum)}`);
- $('connectionDot').classList.toggle('live',s.connected);text('link',s.connected?'Wi-Fi · 已收到数据':s.receiverStopped?'接收已结束':'等待数据');text('packetAge',age(s.packetAgeSeconds));text('packets',`${s.packetCount.toLocaleString()} / ${s.sequenceGaps}`);text('connections',`${s.connections} / ${s.disconnects}`);
- text('network',s.host?`${s.watchAddress||'等待已配对手表'} → ${s.host} · 加密传输`:'等待局域网地址或接收器启动');text('runId',s.runId??'尚无会话');text('serviceNote',s.parseErrors?`有 ${s.parseErrors} 行日志未解析`:'每秒读取本地记录');if(!$('liveView').hidden)chart(s);
+ $('connectionDot').classList.toggle('live',s.connected);text('link',s.connected?`${s.transport==='rfcomm'?'蓝牙':'Wi-Fi'} · 已连接`:s.receiverStopped?'接收已结束':'等待数据');text('packetAge',age(s.packetAgeSeconds));text('packets',`${s.packetCount.toLocaleString()} / ${s.sequenceGaps}`);text('connections',`${s.connections} / ${s.disconnects}`);
+ text('network',s.transport==='rfcomm'?'已配对手表 → 本机蓝牙':s.host?`${s.watchAddress||'等待已配对手表'} → ${s.host} · 加密传输`:'等待可用连接或接收器启动');text('runId',s.runId??'尚无会话');text('serviceNote',s.parseErrors?`有 ${s.parseErrors} 行日志未解析`:'每秒读取本地记录');if(!$('heartTrend').hidden)chart(s);
 }
-async function poll(){try{const response=await fetch('/api/state',{cache:'no-store'});if(!response.ok)throw Error('读取失败');render(await response.json())}catch{document.querySelector('.current').classList.add('unavailable');text('bpm','—');text('status','本地仪表盘服务暂不可用');text('liveBadge','未连接');$('liveBadge').classList.remove('live');$('connectionDot').classList.remove('live');text('serviceNote','等待本地服务恢复')}finally{setTimeout(poll,1000)}}
+async function poll(){if(window.heartRadioStopped)return;try{const response=await fetch('/api/state',{cache:'no-store'});if(!response.ok)throw Error('读取失败');if(!window.heartRadioStopped)render(await response.json())}catch{document.querySelector('.current').classList.add('unavailable');text('bpm','—');text('status',window.heartRadioStopped?'未连接超时，项目服务已停止':'本地仪表盘服务暂不可用');text('liveBadge','未连接');$('liveBadge').classList.remove('live');$('connectionDot').classList.remove('live');text('serviceNote',window.heartRadioStopped?'请用01重新启动':'等待本地服务恢复')}finally{if(!window.heartRadioStopped)setTimeout(poll,1000)}}
+window.addEventListener('heartradio-session-stopped',()=>{
+ document.querySelector('.current').classList.add('unavailable');text('bpm','—');text('status','未连接超时，全部项目后台已停止');
+ text('liveBadge','已停止');text('timerStatus','已结束');text('serviceNote','页面自动刷新已暂停；请用01重新启动后刷新页面');
+ $('liveBadge').classList.remove('live');$('connectionDot').classList.remove('live');text('link','项目服务已停止');
+});
 for(const[button,mode]of [['window10','10'],['windowAll','all']])$(button).addEventListener('click',()=>{windowMode=mode;for(const id of ['window10','windowAll']){$(id).classList.toggle('selected',id===button);$(id).setAttribute('aria-pressed',id===button?'true':'false')}if(lastState)chart(lastState)});
 poll();
 

@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_VERSION = '0.3.1'
+PACKAGE_VERSION = '0.7.0'
 
 
 def atomic_write(path, content):
@@ -46,7 +46,7 @@ def export(destination, python, port=8766, allow_dirty=False):
     command = str(python).replace('\\', '/')
     server = str(destination / 'server.py').replace('\\', '/')
     entry = dict(command=command, args=['-u', server, '--port', str(port)],
-                 supports_parallel_tool_calls=False, timeout=60, connect_timeout=15,
+                 supports_parallel_tool_calls=False, timeout=90, connect_timeout=15,
                  sampling=dict(enabled=False))
     files = {}
     for name, source in {
@@ -79,7 +79,7 @@ def export(destination, python, port=8766, allow_dirty=False):
     index = destination.parent / 'README.md'
     before = index.read_text(encoding='utf-8-sig') if index.exists() else '# 本机 MCP 管理目录\n\n此目录用于统一存放可接入本机 Agent 的工具包。各包由对应项目导出；新增 Agent 先阅读包内 README，再合并自己的配置。\n'
     start, end = '<!-- heartradio:start -->', '<!-- heartradio:end -->'
-    block = f'{start}\n\n- [手表心率与按需读取](./{destination.name}/README.md)：原心率缓存、设备状态、短时气压及运动原始数据。安装由用户手动启动 Agent 后完成，目录导出不会自动注册。\n\n{end}'
+    block = f'{start}\n\n- [手表数据与提醒](./{destination.name}/README.md)：心率缓存与最多15秒的一次性心率、设备状态、气压/运动及有用户限额的提醒，含自由组合并发读取，共十一项工具，含一次30秒用户状态粗略判断。电脑统一选路；目录导出不修改Agent配置。\n\n{end}'
     if start in before and end in before:
         a, b = before.index(start), before.index(end) + len(end)
         before = before[:a] + block + before[b:]
@@ -92,7 +92,7 @@ def export(destination, python, port=8766, allow_dirty=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--destination', type=Path, default=Path(r'D:\AIWorkplace\MCP\heartradio'))
+    parser.add_argument('--destination', type=Path, default=ROOT / 'dist' / 'mcp' / 'heartradio')
     parser.add_argument('--python', type=Path, default=Path(sys.executable))
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--allow-dirty', action='store_true')

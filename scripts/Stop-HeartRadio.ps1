@@ -2,6 +2,7 @@
 param()
 $ErrorActionPreference='Stop'
 if ($PSCmdlet.ShouldProcess('本项目电脑接收器、按需服务和仪表盘','停止')) {
+    try { & "$PSScriptRoot\Connection-Control.ps1" -Action shutdown } catch { Write-Output '连接管理未响应，继续按已登记的项目进程清理。' }
     & "$PSScriptRoot\Stop-Receiver.ps1"
     $taskBridgeError=$null
     try { & "$PSScriptRoot\Capability-Service.ps1" -Action stop }

@@ -19,7 +19,7 @@ import android.widget.TextView
 
 /** Optional test screen; opening the normal heart-rate screen does not start the bridge. */
 class CapabilityActivity : Activity() {
-    private val canvasColor = Color.rgb(16, 22, 20)
+    private val canvasColor = WatchUi.canvas
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var status: TextView
     private lateinit var standbyToggle: Button
@@ -29,9 +29,9 @@ class CapabilityActivity : Activity() {
             val message = CapabilityBridgeService.status + "\n\n定位权限：" +
                 (if (checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") == PackageManager.PERMISSION_GRANTED) "已授权" else "未授权")
             if (status.text.toString() != message) status.text = message
-            val toggleText = if (CapabilityBridgeService.isRunning()) "关闭待命通道" else "开启待命通道"
+            val toggleText = if(AgentInteraction.needsRepair()) "重试关闭交互" else if (AgentInteraction.enabled()) "关闭 Agent 交互" else "开启 Agent 交互"
             if (standbyToggle.text.toString() != toggleText) standbyToggle.text = toggleText
-            standbyToggle.isSelected = CapabilityBridgeService.isRunning()
+            standbyToggle.isSelected = AgentInteraction.enabled()
             standbyToggle.isEnabled = SystemClock.uptimeMillis() >= controlBusyUntil
             handler.postDelayed(this, 1000)
         }
@@ -55,7 +55,7 @@ class CapabilityActivity : Activity() {
         standbyToggle = action("开启待命通道") {
             controlBusyUntil = SystemClock.uptimeMillis() + 500
             standbyToggle.isEnabled = false
-            if (CapabilityBridgeService.isRunning()) stopService(Intent(this, CapabilityBridgeService::class.java)) else begin()
+            AgentInteraction.set(this,if(AgentInteraction.needsRepair())false else !AgentInteraction.enabled())
         }
         ServiceToggleStyle.configure(standbyToggle)
         layout.addView(label("待命时长设置"))
@@ -76,7 +76,7 @@ class CapabilityActivity : Activity() {
         if (intent.getBooleanExtra("start_bridge", false) && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) begin()
     }
     private fun begin() {
-        try { startForegroundService(Intent(this, CapabilityBridgeService::class.java)) }
+        try { AgentInteraction.set(this,true); ConnectionService.start(this,"wifi") }
         catch (e: Exception) { CapabilityBridgeService.status = "启动失败：${e.javaClass.simpleName}" }
     }
     override fun onResume() { super.onResume(); handler.post(refresh) }

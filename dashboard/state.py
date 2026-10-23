@@ -96,6 +96,7 @@ class State:
                     connected=link, receiverStopped=self.stopped, packetAgeSeconds=packet_age,
                     eventAgeSeconds=event_age, measurementMs=p['watchReceiptMs'] if p else None,
                     eventReceivedMs=self.last_event['pcReceiptMs'] if self.last_event else None,
+                    eventSession=p.get('session') if p else None,
                     accuracy=latest['accuracy'] if latest else None, packetCount=self.packet_count,
                     sensorEventCount=self.event_count, validCount=self.valid_count,
                     connections=self.connections, disconnects=self.disconnects, sequenceGaps=self.sequence_gaps,

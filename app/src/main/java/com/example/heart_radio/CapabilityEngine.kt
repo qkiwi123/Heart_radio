@@ -13,8 +13,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/** Public Android APIs only. Independent listeners never update Probe.state or its heart-rate log. */
-class CapabilityEngine(private val context: Context, private val handler: Handler) {
+/** Public Android APIs only. One-shot requests do not update Probe.state or its continuous heart-rate log. */
+class CapabilityEngine(private val context: Context, private val handler: Handler, private val multiplex:Boolean=true) {
     private val sensors = context.getSystemService(SensorManager::class.java)
     private val visibleSensors = sensors.getSensorList(Sensor.TYPE_ALL)
     private val locations = context.getSystemService(LocationManager::class.java)
@@ -24,6 +24,8 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
     private var requestWakeLock: PowerManager.WakeLock? = null
     private val log = File(context.filesDir, "capability-probe/requests.jsonl")
     private val recentIds = LinkedHashSet<String>()
+    private val slots=MeasurementSlots()
+    private val requests=linkedMapOf<String,CapabilityEngine>()
 
     fun execute(request: JSONObject, reply: (JSONObject) -> Unit) {
         val id = request.optString("id")
@@ -31,18 +33,33 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
         fun result(value: JSONObject) {
             value.put("id", id).put("watchResponseWallMs", System.currentTimeMillis())
                 .put("watchResponseElapsedNs", SystemClock.elapsedRealtimeNanos()).put("screenInteractive", Probe.screen(context))
-            audit("result", value)
+            if(multiplex)audit("result", value)
             reply(value)
         }
         if (!recentIds.add(id)) { result(JSONObject().put("status", "duplicate_request")); return }
         if (recentIds.size > 128) recentIds.remove(recentIds.first())
-        audit("request", request)
+        if(multiplex)audit("request", request)
         try {
             val params = request.optJSONObject("params") ?: JSONObject()
+            if(multiplex && request.optString("op") in setOf("sample","heart_sample","motion_window","locate")){
+                val resource=if(request.optString("op")=="locate")"location" else {
+                    val sensor=visibleSensors.getOrNull(params.getInt("sensorId"))
+                    if(sensor==null){result(JSONObject().put("status","not_visible"));return}
+                    "sensor:${sensor.type}"
+                }
+                if(!slots.reserve(id,resource)){result(JSONObject().put("status","busy"));return}
+                val child=CapabilityEngine(context,handler,false)
+                requests[id]=child
+                try{child.execute(request){value -> requests.remove(id);slots.release(id);result(value)}}
+                catch(e:Exception){requests.remove(id);slots.release(id);child.cancelAll("error");throw e}
+                return
+            }
             when (request.optString("op")) {
                 "inventory" -> result(inventory())
                 "status" -> result(deviceState())
                 "cancel" -> {
+                    requests.filterKeys{!params.has("targetId") || params.optString("targetId")==it}.values.toList()
+                        .forEach{it.cancelAll("cancelled")}
                     if (!params.has("targetId") || params.optString("targetId") == activeId) finishActive?.invoke("cancelled")
                     result(JSONObject().put("status", "ok"))
                 }
@@ -50,6 +67,14 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
                 "sample" -> {
                     if (activeId != null) result(JSONObject().put("status", "busy"))
                     else sample(id, params, ::result)
+                }
+                "heart_sample" -> {
+                    if(activeId!=null)result(JSONObject().put("status","busy"))
+                    else sampleHeart(id,params,::result)
+                }
+                "motion_window" -> {
+                    if(activeId!=null)result(JSONObject().put("status","busy"))
+                    else sampleMotionWindow(id,params,::result)
                 }
                 "locate" -> {
                     if (activeId != null) result(JSONObject().put("status", "busy"))
@@ -88,6 +113,7 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
             .put("firmware", Build.DISPLAY).put("bodySensorsPermission", Probe.allowed(context))
             .put("fineLocationPermission", locationPermission()).put("sensors", JSONArray(visibleSensors.map(::descriptor)))
             .put("sensorIdMeaning", "index in this bridge session's static inventory; not a hardware ID")
+            .put("motionWindowVersion",1).put("motionWindowSeconds",30)
             .put("dynamicSensorCount", sensors.getDynamicSensorList(Sensor.TYPE_ALL).size)
             .put("locationProviders", JSONArray(providers.map { JSONObject().put("name", it).put("enabled", locations.isProviderEnabled(it)) }))
             .put("features", JSONArray(context.packageManager.systemAvailableFeatures.mapNotNull { it.name }.sorted()))
@@ -100,8 +126,10 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val bm = context.getSystemService(BatteryManager::class.java)
         val charge = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
-        return JSONObject().put("status", "ok").put("activeRequest", activeId ?: JSONObject.NULL)
-            .put("requestWakeLockHeld", requestWakeLock?.isHeld == true)
+        return JSONObject().put("status", "ok").put("activeRequest", activeId ?: requests.keys.firstOrNull() ?: JSONObject.NULL)
+            .put("activeRequests",JSONArray(slots.entries().map{(id,resource)->JSONObject().put("requestId",id).put("resource",resource)}))
+            .put("maxConcurrentMeasurements",4)
+            .put("requestWakeLockHeld", requestWakeLock?.isHeld == true || requests.values.any{it.requestWakeLock?.isHeld==true})
             .put("batteryPct", if (level >= 0 && scale > 0) level * 100.0 / scale else JSONObject.NULL)
             .put("chargingStatus", battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1))
             .put("plugged", battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1))
@@ -109,13 +137,104 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
             .put("chargeCounterUah", if (charge == Int.MIN_VALUE) JSONObject.NULL else charge)
             .put("screenInteractive", Probe.screen(context)).put("wifiAvailable", manager.allNetworks.any {
                 manager.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true })
-            .put("heartRateCaptureRunning", Probe.state.running)
+            .put("heartRateCaptureRunning", Probe.state.running).put("heartSensorOwners",HeartSensorHub.owners())
+            .put("heartSensorActive",HeartSensorHub.owners()>0).put("agentInteraction",AgentInteraction.state()).put("heartBroadcast",HeartBroadcast.state())
             .put("bridgeLifecycle", CapabilityBridgeService.state())
+    }
+    private fun sampleHeart(id:String,params:JSONObject,reply:(JSONObject)->Unit){
+        require(params.keys().asSequence().toSet()==setOf("sensorId","seconds"))
+        val duration=params.get("seconds");require(duration is Int || duration is Long)
+        val maximum=(duration as Number).toLong();require(maximum in 1..15);val seconds=maximum.toInt()
+        val sensorNumber=params.get("sensorId");require(sensorNumber is Int||sensorNumber is Long)
+        val index=(sensorNumber as Number).toLong();require(index>=0&&index<visibleSensors.size)
+        val sensor=visibleSensors.getOrNull(index.toInt())
+        require(sensor!=null&&sensor.type==Sensor.TYPE_HEART_RATE&&sensor.name==Probe.sensor(context)?.name)
+        if(!Probe.allowed(context)){reply(JSONObject().put("status","permission_denied"));return}
+        val begin=SystemClock.elapsedRealtimeNanos();val window=HeartRequestWindow(begin,seconds);val reading=window.reading
+        val owner="request:$id";val rows=JSONArray();var acquired=false
+        val finish:(String)->Unit={reason->
+            if(activeId==id){
+                cleanup?.invoke();cleanup=null;activeId=null;finishActive=null
+                val status=if(reason=="timeout")window.timeoutStatus() else reason
+                reply(JSONObject().put("status",status).put("sensor",descriptor(sensor)).put("samples",rows)
+                    .put("callbacks",reading.callbacks).put("requestedSeconds",seconds).put("actualElapsedMs",(SystemClock.elapsedRealtimeNanos()-begin)/1_000_000.0)
+                    .put("listenersReleased",true).put("requestWakeLockHeldAtResult",requestWakeLock?.isHeld==true)
+                    .put("continuousHeartPreserved",Probe.state.running).put("heartSensorOwnersAfter",HeartSensorHub.owners())
+                    .put("sourceAgeVerified",false))
+            }
+        }
+        val timeout=Runnable{finish("timeout")}
+        val listener=object:SensorEventListener{
+            override fun onSensorChanged(event:SensorEvent){
+                if(activeId!=id)return
+                val now=SystemClock.elapsedRealtimeNanos()
+                if(window.expired(now)){finish("timeout");return}
+                val value=event.values.firstOrNull()?:Float.NaN
+                if(reading.accept(value,event.accuracy,event.timestamp,now,System.currentTimeMillis())){
+                    rows.put(JSONObject().put("values",JSONArray(listOf(value.toDouble()))).put("accuracy",event.accuracy)
+                        .put("eventNs",event.timestamp).put("watchReceiptWallMs",System.currentTimeMillis()))
+                    finish("data_received")
+                }
+            }
+            override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int){reading.accuracyChanged(accuracy)}
+        }
+        activeId=id;finishActive=finish
+        cleanup={if(acquired)HeartSensorHub.release(owner);reading.stop();releaseRequestWakeLock();handler.removeCallbacks(timeout)}
+        try{
+            keepCpuForRequest(seconds)
+            acquired=HeartSensorHub.acquire(context,owner,listener);reading.registered=acquired
+            if(!acquired)finish("registration_failed") else {
+                val remaining=window.remainingMs(SystemClock.elapsedRealtimeNanos())
+                if(remaining==0L)finish("timeout") else handler.postDelayed(timeout,remaining)
+            }
+        }catch(e:Exception){cleanup?.invoke();cleanup=null;activeId=null;finishActive=null;throw e}
+    }
+    private fun sampleMotionWindow(id:String,params:JSONObject,reply:(JSONObject)->Unit){
+        require(params.keys().asSequence().toSet()==setOf("sensorId","seconds"))
+        require(params.get("seconds") is Int && params.getInt("seconds")==30)
+        require(params.get("sensorId") is Int)
+        val sensor=visibleSensors.getOrNull(params.getInt("sensorId"))
+        require(sensor!=null && sensor.type in setOf(Sensor.TYPE_ACCELEROMETER,Sensor.TYPE_GYROSCOPE))
+        val begin=SystemClock.elapsedRealtimeNanos();val beginWall=System.currentTimeMillis()
+        val window=MotionWindow(sensor.type,begin);var callbacks=0;var registered=false
+        val finish:(String)->Unit={reason->
+            if(activeId==id){
+                cleanup?.invoke();cleanup=null;activeId=null;finishActive=null
+                reply(JSONObject().put("status",if(reason=="window_complete" && window.count()>0)"data_received" else reason)
+                    .put("sensor",descriptor(sensor)).put("summaryVersion",1).put("requestedSeconds",30)
+                    .put("watchBeginElapsedNs",begin).put("watchBeginWallMs",beginWall)
+                    .put("actualElapsedMs",(SystemClock.elapsedRealtimeNanos()-begin)/1_000_000.0)
+                    .put("callbacks",callbacks).put("sampleCount",window.count()).put("invalidEvents",window.invalidEvents)
+                    .put("sampleLimit",4096).put("truncated",window.truncated).put("rms",window.rms())
+                    .put("arrivalSpanMs",window.spanMs()).put("maximumArrivalGapMs",window.maxGapMs())
+                    .put("bins",JSONArray(window.bins().map{JSONObject().put("second",it.second).put("count",it.count).put("rms",it.rms)}))
+                    .put("listenersReleased",true).put("requestWakeLockHeldAtResult",requestWakeLock?.isHeld==true))
+            }
+        }
+        val timeout=Runnable{finish("window_complete")}
+        val listener=object:SensorEventListener{
+            override fun onSensorChanged(event:SensorEvent){
+                if(activeId!=id)return
+                val now=SystemClock.elapsedRealtimeNanos()
+                if(now-begin>=30_000_000_000L){finish("window_complete");return}
+                callbacks++
+                if(!window.accept(event.values,now))finish("sample_limit")
+            }
+            override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int){}
+        }
+        activeId=id;finishActive=finish
+        cleanup={try{sensors.unregisterListener(listener)}finally{releaseRequestWakeLock();handler.removeCallbacks(timeout)}}
+        try{
+            keepCpuForRequest(30)
+            registered=sensors.registerListener(listener,sensor,200_000,0,handler)
+            if(!registered)finish("registration_failed") else handler.postDelayed(timeout,30_000)
+        }catch(e:Exception){finish(if(e is SecurityException)"permission_denied" else "registration_error")}
     }
     private fun sample(id: String, params: JSONObject, reply: (JSONObject) -> Unit) {
         val sensorId = params.getInt("sensorId")
         val sensor = visibleSensors.getOrNull(sensorId)
         if (sensor == null) { reply(JSONObject().put("status", "not_visible")); return }
+        if (sensor.type == Sensor.TYPE_HEART_RATE) { reply(JSONObject().put("status", "use_continuous_heart_cache")); return }
         val seconds = params.optInt("seconds", 5)
         require(seconds in 1..60) { "seconds must be 1..60" }
         val periodUs = params.optInt("periodUs", 200_000)
@@ -283,9 +402,11 @@ class CapabilityEngine(private val context: Context, private val handler: Handle
         catch (e: SecurityException) { cleanup?.invoke(); cleanup = null; activeId = null; finishActive = null; throw e }
         catch (e: Exception) { cleanup?.invoke(); cleanup = null; activeId = null; finishActive = null; throw e }
     }
-    fun cancelAll() { finishActive?.invoke("disconnected") }
+    fun cancelAll(reason:String="disconnected") {
+        requests.values.toList().forEach{it.cancelAll(reason)}
+        finishActive?.invoke(reason)
+    }
     private fun audit(kind: String, value: JSONObject) {
-        try { log.parentFile?.mkdirs(); log.appendText(JSONObject().put("kind", kind).put("wallMs", System.currentTimeMillis()).put("data", value).toString() + "\n") }
-        catch (_: Exception) { CapabilityBridgeService.status = "测试日志写入失败" }
+        WatchDiagnostics.append(log,JSONObject().put("kind",kind).put("wallMs",System.currentTimeMillis()).put("data",value).toString(),true)
     }
 }

@@ -14,11 +14,23 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
+using System.Reflection;
 using System.Windows.Threading;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 
 namespace HeartRadioDesktop {
+    public static class AppIcon {
+        public static readonly BitmapSource Source=Load();
+        static BitmapSource Load(){
+            using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("HeartRadio.AppIcon")){
+                if(stream==null)throw new InvalidOperationException("HeartRadio application icon is missing from this build.");
+                var icon=BitmapFrame.Create(stream,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad);
+                icon.Freeze();return icon;
+            }
+        }
+    }
     public static class Data {
         public static object Get(IDictionary<string,object> d,string key) { object v; return d.TryGetValue(key,out v)?v:null; }
         public static double Number(IDictionary<string,object> d,string key,double fallback=0) { object v=Get(d,key); return v==null?fallback:Convert.ToDouble(v,CultureInfo.InvariantCulture); }
@@ -63,6 +75,7 @@ namespace HeartRadioDesktop {
         readonly Host host;
         public WidgetWindow(Host owner,string kind) {
             host=owner;Kind=kind;Title=kind=="current"?"HeartRadio · 桌面心率":"HeartRadio · 桌面趋势";
+            Icon=AppIcon.Source;
             Width=kind=="current"?300:480;Height=kind=="current"?198:264;
             MinWidth=kind=="current"?300:380;MinHeight=kind=="current"?198:220;
             MaxWidth=SystemParameters.VirtualScreenWidth;MaxHeight=SystemParameters.VirtualScreenHeight;
@@ -75,9 +88,9 @@ namespace HeartRadioDesktop {
             var close=Button("×","关闭这个桌面小窗");CloseButton=close;DockPanel.SetDock(close,Dock.Right);header.Children.Add(close);
             var pin=Button("置顶 ✓","切换置顶");Pin=pin;DockPanel.SetDock(pin,Dock.Right);header.Children.Add(pin);
             var dragTitle=new Border{Background=Brushes.Transparent,Child=Data.Label(kind=="current"?"♥  当前心率":"心率变化 · 近 10 分钟",12,kind=="current"?Data.HeartRed:Data.Muted),ToolTip="拖动此处移动小窗"};header.Children.Add(dragTitle);dragArea=dragTitle;
-            dragTitle.MouseLeftButtonDown+=(s,e)=>{if(Locked)return;if(e.OriginalSource is TextBlock && ((TextBlock)e.OriginalSource).Text=="×")return;try{DragMove();host.SaveLayout();}catch(InvalidOperationException){} };
+            dragTitle.MouseLeftButtonDown+=(s,e)=>{if(Locked)return;if(e.OriginalSource is TextBlock && ((TextBlock)e.OriginalSource).Text=="×")return;try{DragMove();host.SaveLayout(Kind);}catch(InvalidOperationException){} };
             close.Click+=async(s,e)=>{Hide();await host.Hide(Kind);};
-            pin.Click+=(s,e)=>{Topmost=!Topmost;pin.Content=Topmost?"置顶 ✓":"置顶";host.SaveLayout();};
+            pin.Click+=(s,e)=>{Topmost=!Topmost;pin.Content=Topmost?"置顶 ✓":"置顶";host.SaveLayout(Kind);};
             panel.Children.Add(header);
             var center=new StackPanel{VerticalAlignment=VerticalAlignment.Center};Grid.SetRow(center,1);
             if(kind=="current"){
@@ -94,7 +107,7 @@ namespace HeartRadioDesktop {
             Point resizeOrigin=new Point();double resizeWidth=0,resizeHeight=0;
             resize.DragStarted+=(s,e)=>{resizeOrigin=PointToScreen(Mouse.GetPosition(this));resizeWidth=Width;resizeHeight=Height;};
             resize.DragDelta+=(s,e)=>{if(Locked)return;var point=PointToScreen(Mouse.GetPosition(this));var dpi=VisualTreeHelper.GetDpi(this);Width=Math.Max(MinWidth,Math.Min(MaxWidth,resizeWidth+(point.X-resizeOrigin.X)/dpi.DpiScaleX));Height=Math.Max(MinHeight,Math.Min(MaxHeight,resizeHeight+(point.Y-resizeOrigin.Y)/dpi.DpiScaleY));};
-            resize.DragCompleted+=(s,e)=>host.SaveLayout();
+            resize.DragCompleted+=(s,e)=>host.SaveLayout(Kind);
             SizeChanged+=(s,e)=>{if(Value!=null){double scale=Math.Min(ActualWidth/300,ActualHeight/198);Value.FontSize=Math.Min(180,68*scale);HeartUnit.FontSize=Math.Min(40,16*scale);HeartUnit.Margin=new Thickness(12,Math.Min(75,30*scale),0,0);}};
             Content=panel;
             SourceInitialized+=(s,e)=>ApplyNativeLock();
@@ -114,6 +127,7 @@ namespace HeartRadioDesktop {
                 Value.Foreground=Data.Flag(state,"valid")?Data.HeartRed:Data.Muted;
                 Status.Text=Data.Text(state,"status");object age=Data.Get(state,"eventAgeSeconds");Age.Text=age==null?"尚无心率事件":"上次事件："+Math.Floor(Convert.ToDouble(age)).ToString()+" 秒前";
             }else{Chart.Update(state);Age.Text=Data.Text(state,"status")+" · 电脑接收时间";}
+            if(host.LayoutError!=null){Age.Text+=" · 布局未保存";Age.ToolTip=host.LayoutError;}else Age.ToolTip=null;
         }
         public void Unavailable(){if(Value!=null){Value.Text="—";Value.Foreground=Data.Muted;Status.Text="本地仪表盘服务暂不可用";}Age.Text="等待连接恢复";}
     }
@@ -122,7 +136,13 @@ namespace HeartRadioDesktop {
         readonly HttpClient client;readonly JavaScriptSerializer json=new JavaScriptSerializer{MaxJsonLength=4000000};
         readonly string baseUrl,layoutPath;readonly Process owner;
         public WidgetWindow CurrentWidget,TrendWidget;public bool Exiting;bool busy;DispatcherTimer timer;
-        public Host(int port,int ownerPid,string layout){baseUrl="http://127.0.0.1:"+port;layoutPath=layout;owner=Process.GetProcessById(ownerPid);client=new HttpClient(new HttpClientHandler{UseProxy=false});client.Timeout=TimeSpan.FromSeconds(2);client.DefaultRequestHeaders.Add("X-HeartRadio-Action","widgets");ShutdownMode=ShutdownMode.OnExplicitShutdown;}
+        class LayoutUpdate {public long Sequence;public Dictionary<string,object> Changes;public int Attempts;public DateTime RetryAt;}
+        readonly Dictionary<string,LayoutUpdate> pendingLayouts=new Dictionary<string,LayoutUpdate>();
+        readonly string layoutClient=Guid.NewGuid().ToString("N");long layoutSequence;bool layoutBusy;
+        readonly Func<Dictionary<string,object>,Task<Dictionary<string,object>>> layoutSender;
+        public string LayoutError {get;private set;}
+        public int PendingLayouts {get{return pendingLayouts.Count;}}
+        public Host(int port,int ownerPid,string layout,Func<Dictionary<string,object>,Task<Dictionary<string,object>>> sender=null){baseUrl="http://127.0.0.1:"+port;layoutPath=layout;owner=Process.GetProcessById(ownerPid);client=new HttpClient(new HttpClientHandler{UseProxy=false});client.Timeout=TimeSpan.FromSeconds(2);client.DefaultRequestHeaders.Add("X-HeartRadio-Action","widgets");ShutdownMode=ShutdownMode.OnExplicitShutdown;layoutSender=sender??SendLayout;}
         protected override void OnStartup(StartupEventArgs e){base.OnStartup(e);CurrentWidget=new WidgetWindow(this,"current");TrendWidget=new WidgetWindow(this,"trend");RestoreLayout();timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(1)};timer.Tick+=Tick;timer.Start();Tick(null,EventArgs.Empty);}
         async void Tick(object sender,EventArgs e){
             if(owner.HasExited){Exiting=true;Shutdown();return;}if(busy)return;busy=true;
@@ -132,33 +152,48 @@ namespace HeartRadioDesktop {
                 var locked=Data.Get(control,"locked") as IDictionary<string,object>;
                 if(locked!=null){if(CurrentWidget.Locked!=Data.Flag(locked,"current"))CurrentWidget.SetLocked(Data.Flag(locked,"current"));if(TrendWidget.Locked!=Data.Flag(locked,"trend"))TrendWidget.SetLocked(Data.Flag(locked,"trend"));}
                 SetVisible(CurrentWidget,Data.Flag(control,"current"));SetVisible(TrendWidget,Data.Flag(control,"trend"));
-                CurrentWidget.Update(state);TrendWidget.Update(state);
+                await FlushLayoutAsync();CurrentWidget.Update(state);TrendWidget.Update(state);
             }catch(Exception error){CurrentWidget.Unavailable();TrendWidget.Unavailable();try{File.WriteAllText(Path.Combine(Path.GetDirectoryName(layoutPath),"widgets-error.txt"),error.ToString(),Encoding.UTF8);}catch{}}finally{busy=false;}
         }
         void SetVisible(Window window,bool visible){if(visible&&!window.IsVisible)window.Show();else if(!visible&&window.IsVisible)window.Hide();}
         public async Task Hide(string kind){
-            SaveLayout();
+            SaveLayout(kind);await FlushLayoutAsync();
             try{var body=json.Serialize(new Dictionary<string,object>{{"widget",kind},{"visible",false}});var response=await client.PostAsync(baseUrl+"/api/widgets",new StringContent(body,Encoding.UTF8,"application/json"));response.EnsureSuccessStatusCode();}catch(Exception){}
         }
-        public void SaveLayout(){
+        public void SaveLayout(string kind=null){
             if(CurrentWidget==null||TrendWidget==null)return;
+            foreach(var w in new[]{CurrentWidget,TrendWidget}){
+                if((kind!=null&&kind!=w.Kind)||w.Locked)continue;
+                pendingLayouts[w.Kind]=new LayoutUpdate{Sequence=++layoutSequence,Changes=new Dictionary<string,object>{{"left",w.Left},{"top",w.Top},{"width",w.Width},{"height",w.Height},{"topmost",w.Topmost}}};
+            }
+            LayoutError=null;
+            // Save on completed gestures only. Tick retries a failed write; mouse movement never does I/O.
+            var ignored=FlushLayoutAsync();
+        }
+        async Task<Dictionary<string,object>> SendLayout(Dictionary<string,object> value){
+            var response=await client.PostAsync(baseUrl+"/api/widgets",new StringContent(json.Serialize(value),Encoding.UTF8,"application/json"));
+            response.EnsureSuccessStatusCode();return json.Deserialize<Dictionary<string,object>>(await response.Content.ReadAsStringAsync());
+        }
+        public async Task FlushLayoutAsync(){
+            if(layoutBusy)return;layoutBusy=true;
             try{
-                IDictionary<string,object> saved=null;
-                if(File.Exists(layoutPath))saved=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(layoutPath));
-                var all=new Dictionary<string,object>();
-                foreach(var w in new[]{CurrentWidget,TrendWidget}){
-                    var previous=saved==null?null:Data.Get(saved,w.Kind) as IDictionary<string,object>;
-                    bool locked=previous==null?w.Locked:Data.Get(previous,"locked")==null?Data.Flag(previous,"movementLocked"):Data.Flag(previous,"locked");
-                    all[w.Kind]=new Dictionary<string,object>{{"left",w.Left},{"top",w.Top},{"width",w.Width},{"height",w.Height},{"topmost",w.Topmost},{"locked",locked}};
+                foreach(var kind in new[]{"current","trend"}){
+                    LayoutUpdate entry;if(!pendingLayouts.TryGetValue(kind,out entry)||entry.Attempts>=3||entry.RetryAt>DateTime.UtcNow)continue;
+                    try{
+                        var reply=await layoutSender(new Dictionary<string,object>{{"widget",kind},{"layout",entry.Changes},{"client_id",layoutClient},{"sequence",entry.Sequence}});
+                        string status=Data.Text(reply,"status");if(status!="saved"&&status!="already_applied"&&status!="locked")throw new IOException("布局保存尚未确认");
+                        LayoutUpdate current;if(pendingLayouts.TryGetValue(kind,out current)&&current.Sequence==entry.Sequence)pendingLayouts.Remove(kind);
+                        if(status=="locked"){var window=kind=="current"?CurrentWidget:TrendWidget;window.SetLocked(true);}
+                        LayoutError=null;
+                    }catch(Exception){entry.Attempts++;entry.RetryAt=DateTime.UtcNow.AddSeconds(entry.Attempts*2);}
                 }
-                File.WriteAllText(layoutPath,json.Serialize(all),Encoding.UTF8);
-            }catch(IOException){}catch(UnauthorizedAccessException){}
+            }finally{layoutBusy=false;LayoutError=null;foreach(var entry in pendingLayouts.Values)if(entry.Attempts>0)LayoutError="当前位置暂未保存，连接恢复后重新调整即可再次保存。";}
         }
         void RestoreLayout(){
             try{if(!File.Exists(layoutPath))return;var all=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(layoutPath));foreach(var w in new[]{CurrentWidget,TrendWidget}){var d=Data.Get(all,w.Kind)as IDictionary<string,object>;if(d==null)continue;w.Width=Math.Max(w.MinWidth,Math.Min(w.MaxWidth,Data.Number(d,"width",w.Width)));w.Height=Math.Max(w.MinHeight,Math.Min(w.MaxHeight,Data.Number(d,"height",w.Height)));w.Left=Math.Max(SystemParameters.VirtualScreenLeft,Math.Min(Data.Number(d,"left",w.Left),SystemParameters.VirtualScreenLeft+SystemParameters.VirtualScreenWidth-w.Width));w.Top=Math.Max(SystemParameters.VirtualScreenTop,Math.Min(Data.Number(d,"top",w.Top),SystemParameters.VirtualScreenTop+SystemParameters.VirtualScreenHeight-w.Height));w.Topmost=Data.Flag(d,"topmost");w.Pin.Content=w.Topmost?"置顶 ✓":"置顶";w.SetLocked(Data.Get(d,"locked")==null?Data.Flag(d,"movementLocked"):Data.Flag(d,"locked"));}}
             catch(Exception){}
         }
-        protected override void OnExit(ExitEventArgs e){Exiting=true;SaveLayout();if(timer!=null)timer.Stop();client.Dispose();base.OnExit(e);}
+        protected override void OnExit(ExitEventArgs e){Exiting=true;var ignored=FlushLayoutAsync();if(timer!=null)timer.Stop();client.Dispose();base.OnExit(e);}
         [STAThread] public static void Main(string[] args){
             try{if(args.Length!=3)throw new ArgumentException("请从HeartRadio网页开启桌面小窗");new Host(Int32.Parse(args[0]),Int32.Parse(args[1]),args[2]).Run();}
             catch(Exception error){try{string folder=Path.GetDirectoryName(args.Length==3?args[2]:AppDomain.CurrentDomain.BaseDirectory);File.WriteAllText(Path.Combine(folder,"widgets-error.txt"),error.ToString(),Encoding.UTF8);}catch{} }

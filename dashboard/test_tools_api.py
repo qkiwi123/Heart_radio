@@ -4,9 +4,10 @@ import json
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import server
 from data_access import DataAccess
+from reminders import Reminders
 
 
 class ToolsApiTests(unittest.TestCase):
@@ -18,6 +19,10 @@ class ToolsApiTests(unittest.TestCase):
         override = patch.object(server, 'data_access', access)
         override.start()
         self.addCleanup(override.stop)
+        self.reminder_wire=Mock(side_effect=lambda op,p:dict(status='issued',reminderId=p['reminderId']))
+        self.reminders=Reminders(self.temp.name,self.reminder_wire)
+        override_reminders=patch.object(server,'reminders',self.reminders)
+        override_reminders.start();self.addCleanup(override_reminders.stop)
         self.http = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         self.worker = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.worker.start()
@@ -46,6 +51,20 @@ class ToolsApiTests(unittest.TestCase):
             self.assertEqual(self.request('POST', value=dict(name='measure_pressure', arguments={}), extra=extra)[0], 403)
         self.assertEqual(self.request('POST', value=dict(name='measure_pressure', arguments=dict(seconds=60)))[0], 400)
         self.assertEqual(self.request('POST', value=dict(name='vendor_ppg', arguments={}))[0], 400)
+
+    def test_mcp_tool_entry_accepts_long_unicode_and_shares_web_record(self):
+        args=dict(reminder_id='mcp',title='标题',body='字'*500,vibration=dict(count=3,pulse_ms=300,gap_ms=500))
+        status,body=self.request('POST',value=dict(name='send_reminder',arguments=args))
+        self.assertEqual(status,200);self.assertTrue(json.loads(body)['ok'])
+        status,body=self.request('POST',value=dict(name='get_reminder_status',arguments=dict(reminder_id='mcp')))
+        self.assertEqual(status,200);self.assertEqual(json.loads(body)['receipt']['reminderId'],'mcp')
+        self.reminder_wire.assert_called_once()
+
+    def test_tool_entry_cannot_enable_interaction_or_bypass_nested_validation(self):
+        for args in [dict(reminder_id='bad',title='x',body='y',enable=True),
+                     dict(reminder_id='bad',title='x',body='y',vibration=dict(count=True))]:
+            self.assertEqual(self.request('POST',value=dict(name='send_reminder',arguments=args))[0],400)
+        self.reminder_wire.assert_not_called()
 
 
 if __name__ == '__main__':

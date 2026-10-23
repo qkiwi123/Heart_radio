@@ -9,8 +9,8 @@ class CaptureService : Service(), SensorEventListener {
     private val handler = Handler(Looper.getMainLooper())
     private var receiverAdded = false
     private var ble: BleTransport? = null
-    private var wifi: WifiTransport? = null
     private var lastDiagnosticMs = 0L
+    private var hasCaptureSession=false
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             if (i.action == Intent.ACTION_POWER_CONNECTED || i.action == Intent.ACTION_POWER_DISCONNECTED)
@@ -28,6 +28,7 @@ class CaptureService : Service(), SensorEventListener {
                 CaptureDiagnostics.record(this@CaptureService, "periodic")
                 lastDiagnosticMs = nowMs
             }
+            HeartStream.publish(2)
             if (ble !is BleDuplex) ble?.publish(2) // Duplex has its own 5-second link status, never a sensor sample.
             handler.postDelayed(this, 15_000) // No wake lock/alarm: may be delayed by sleep.
         }
@@ -38,14 +39,29 @@ class CaptureService : Service(), SensorEventListener {
         Probe.log(this, "service_create")
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if(ProjectSession.suspended){stopSelf(startId);return START_NOT_STICKY}
         if (intent?.action == "STOP") { finishCapture("notification_stop"); return START_NOT_STICKY }
+        if(intent?.action=="HEART_SYNC_START" && !HeartBroadcast.acceptsStart(intent.getStringExtra("broadcastVersion")?:"")){
+            if(!Probe.state.running)stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        if(intent?.action!="HEART_SYNC_START" && !Probe.state.running && !HeartBroadcast.externalStart()){
+            stopSelf(startId);return START_NOT_STICKY
+        }
         val bluetoothStart = intent?.action == "BLE_START" || intent?.action == "BLE_CLIENT_START"
         val wifiStart = intent?.action == "WIFI_START"
         if (bluetoothStart && Probe.state.running) { startBle(intent); return START_NOT_STICKY }
         if (wifiStart && Probe.state.running) { startWifi(intent); return START_NOT_STICKY }
         if (Probe.state.running) return START_NOT_STICKY
         Probe.startLog(this)
-        Probe.state.reset(SystemClock.elapsedRealtimeNanos())
+        hasCaptureSession=true
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        Probe.state.reset(startedNs)
+        HeartStream.lastEvent = null
+        HeartStream.diagnostics.begin(java.util.UUID.randomUUID().toString(), startedNs)
+        val battery=registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        HeartStream.startContext=org.json.JSONObject().put("screenInteractive",Probe.screen(this))
+            .put("plugged",battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1)).put("requestedPeriodUs",1_000_000)
         Probe.log(this, "session_start", mapOf("permission" to Probe.allowed(this), "staleRuleSeconds" to 30,
             "sdk" to Build.VERSION.SDK_INT, "model" to Build.MODEL, "requestedPeriodUs" to 1_000_000,
             "maxReportLatencyUs" to 0, "wakeLock" to false, "diagnosticSchema" to 3,
@@ -79,8 +95,10 @@ class CaptureService : Service(), SensorEventListener {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
             else registerReceiver(screenReceiver, filter)
             receiverAdded = true
-            val ok = Probe.manager(this).registerListener(this, sensor, 1_000_000, 0, handler)
+            val ok = HeartSensorHub.acquire(this,"continuous",this)
+            ProjectSession.monitor(this)
             Probe.state.registered = ok
+            if (ok) HeartStream.diagnostics.registered()
             Probe.state.result = if (ok) "注册成功 (true)" else "失败：registerListener 返回 false"
             Probe.log(this, "registration", mapOf("success" to ok, "result" to Probe.state.result))
             if (!ok) finishCapture("registration_false") else { handler.post(heartbeat); if (bluetoothStart) startBle(intent); if (wifiStart) startWifi(intent) }
@@ -89,7 +107,6 @@ class CaptureService : Service(), SensorEventListener {
     }
     private fun startBle(intent: Intent?) {
         if (!Probe.bluetoothAllowed(this)) { Probe.bleStatus = "蓝牙权限未授权"; return }
-        wifi?.close(); wifi = null
         // On newer Android restart through a fresh foreground start so both service types are declared.
         if (Build.VERSION.SDK_INT >= 34) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -108,17 +125,13 @@ class CaptureService : Service(), SensorEventListener {
         ble?.start()
     }
     private fun startWifi(intent: Intent?) {
-        try {
-            val preferences = getSharedPreferences("wifi", MODE_PRIVATE)
-            val code = intent?.getStringExtra("connection_code") ?: preferences.getString("connection_code", "") ?: ""
-            val config = WifiConfig.parse(code)
-            ble?.close(); ble = null
-            wifi?.close(); wifi = null
-            preferences.edit().putString("connection_code", code).apply()
-            wifi = WifiTransport(this, config).also { it.start() }
-        } catch (e: Exception) { Probe.wifiStatus = "Wi-Fi 配置失败：${e.message}" }
+        intent?.getStringExtra("connection_code")?.let {
+            getSharedPreferences("wifi",MODE_PRIVATE).edit().putString("connection_code",it).apply()
+        }
+        ConnectionService.start(this,"wifi")
     }
     private fun fail(reason: String) {
+        HeartStream.diagnostics.failed(reason,SystemClock.elapsedRealtimeNanos())
         Probe.state.result = "失败：$reason"
         Probe.log(this, "failure", mapOf("reason" to reason))
         finishCapture("failure")
@@ -142,24 +155,32 @@ class CaptureService : Service(), SensorEventListener {
             "deliveryDelayMs" to (arrival - event.timestamp) / 1_000_000.0, "valid" to valid,
             "callbacks" to st.callbacks, "validCount" to st.validCount,
             "recentValueAtReceipt" to st.recentValue(arrival), "sourceTimeNote" to st.sourceTimeNote()))
+        HeartStream.diagnostics.callback(arrival,valid)
+        HeartStream.lastEvent=org.json.JSONObject().put("event","heart").put("sequence",st.callbacks)
+            .put("valid",valid).put("bpm",if(valid)bpm else org.json.JSONObject.NULL).put("accuracy",event.accuracy)
+            .put("eventNs",event.timestamp).put("arrivalNs",arrival).put("watchReceiptMs",st.lastWallMs)
+            .put("screenInteractive",Probe.screen(this)).put("heartAttemptId",HeartStream.diagnosticJson().opt("attemptId"))
+            .put("sourceAgeVerified",false).put("sourceTimeNote",st.sourceTimeNote())
+        HeartStream.publish(1)
         ble?.publish(1)
-        wifi?.publish(1)
     }
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
         if (!Probe.state.running || !Probe.state.registered) return
         Probe.state.accuracyChanged(accuracy)
         Probe.log(this, "accuracy", mapOf("accuracy" to accuracy))
         ble?.publish(3)
-        wifi?.publish(3)
+        HeartStream.publish(3)
     }
     private fun finishCapture(reason: String) {
         CaptureDiagnostics.record(this, "capture_stop")
-        wifi?.close(); wifi = null
         ble?.close(); ble = null
-        Probe.manager(this).unregisterListener(this)
+        HeartSensorHub.release("continuous")
         handler.removeCallbacksAndMessages(null)
         if (receiverAdded) { unregisterReceiver(screenReceiver); receiverAdded = false }
         Probe.state.stop()
+        HeartBroadcast.captureStopped(reason)
+        HeartStream.diagnostics.stopped(reason,SystemClock.elapsedRealtimeNanos())
+        HeartStream.publish(2)
         Probe.log(this, "session_stop", mapOf("reason" to reason, "callbacks" to Probe.state.callbacks, "validCount" to Probe.state.validCount))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -167,12 +188,12 @@ class CaptureService : Service(), SensorEventListener {
     override fun onTaskRemoved(rootIntent: Intent?) { Probe.log(this, "task_removed"); super.onTaskRemoved(rootIntent) }
     override fun onDestroy() {
         CaptureDiagnostics.record(this, "service_destroy")
-        wifi?.close(); wifi = null
         ble?.close(); ble = null
-        Probe.manager(this).unregisterListener(this)
+        HeartSensorHub.release("continuous")
         handler.removeCallbacksAndMessages(null)
         if (receiverAdded) { unregisterReceiver(screenReceiver); receiverAdded = false }
-        if (Probe.state.running) { Probe.state.stop(); Probe.log(this, "session_stop", mapOf("reason" to "service_destroy")) }
+        if (Probe.state.running) { Probe.state.stop(); HeartStream.diagnostics.stopped("service_destroy",SystemClock.elapsedRealtimeNanos()); HeartStream.publish(2); Probe.log(this, "session_stop", mapOf("reason" to "service_destroy")) }
+        if(hasCaptureSession)HeartBroadcast.captureStopped("service_destroy")
         Probe.log(this, "service_destroy")
         super.onDestroy()
     }

@@ -20,7 +20,7 @@ class PackageTests(unittest.TestCase):
             self.assertFalse(result['agentConfigModified'])
             status = check_module.check(destination)
             self.assertTrue(status['packageValid'])
-            self.assertEqual(len(status['tools']), 6)
+            self.assertEqual(len(status['tools']), 11)
             self.assertEqual(status['localService'], 'local_service_unavailable')
             self.assertFalse(status['localServiceAvailable'])
             (destination / 'tools.json').write_text('[]', encoding='utf-8')

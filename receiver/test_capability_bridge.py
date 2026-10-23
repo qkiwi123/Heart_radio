@@ -39,6 +39,11 @@ async def until(predicate):
 
 
 class LocalEndpointTests(unittest.TestCase):
+    def test_heart_sample_bound_is_shared_by_wifi(self):
+        value=dict(op='heart_sample',params=dict(sensorId=0,seconds=15))
+        self.assertEqual(validate_request(value),value)
+        for params in [dict(sensorId=0,seconds=16),dict(sensorId=0,seconds=True),dict(sensorId=0,seconds=15,continuous=True)]:
+            with self.assertRaises(ValueError):validate_request(dict(op='heart_sample',params=params))
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.loop = asyncio.new_event_loop()
@@ -81,8 +86,30 @@ class LocalEndpointTests(unittest.TestCase):
         self.assertEqual(json.loads(data)['status'], 'watch_offline')
         self.assertEqual(self.bridge.pending, {})
 
+    def test_shared_gate_sync_uses_restricted_validated_control_channel(self):
+        from interaction_sync import InteractionRegister
+        register=InteractionRegister('pc');register.edit(True,30000)
+        params=dict(selectionId='a'*32,syncId='b'*32,state=register.wire())
+        payload=dict(op='sync_interaction',params=params)
+        self.assertEqual(validate_request(payload),payload)
+        headers={'Content-Type':'application/json','X-HeartRadio-Probe':'request'}
+        code,body=self.call('POST','/request',json.dumps(payload),headers)
+        self.assertEqual(code,200);self.assertEqual(json.loads(body)['status'],'watch_offline')
+        self.assertEqual(self.call('POST','/request',json.dumps(payload),dict(headers,Origin='https://outside.example'))[0],403)
+        for bad in [dict(params,force=True),dict(params,syncId='bad'),dict(params,state={'pc':None})]:
+            self.assertEqual(self.call('POST','/request',json.dumps(dict(op='sync_interaction',params=bad)),headers)[0],400)
+
 
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uncertain_reminder_timeout_is_not_replayed_or_sent_as_sensor_cancel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bridge=Bridge(b'x'*32,Path(directory)/'log.jsonl');writer=FakeWriter();bridge.writer=writer
+            try:
+                with patch('capability_bridge.asyncio.wait_for',side_effect=asyncio.TimeoutError):
+                    result=await bridge.request(dict(op='remind',params=dict(reminderId='once',title='测试',body='仅发一次',ttlMs=60000)))
+                self.assertEqual(result['status'],'outcome_unknown_timeout');self.assertEqual(len(writer.rows),1)
+                self.assertEqual(json.loads(writer.rows[0][4:])['op'],'remind');self.assertEqual(bridge.pending,{})
+            finally:bridge.log_file.close()
     async def test_duration_sync_is_opt_in_and_old_firmware_receives_no_command(self):
         with tempfile.TemporaryDirectory() as directory:
             bridge=Bridge(b'x'*32,Path(directory)/'log.jsonl');writer=FakeWriter();bridge.writer=writer

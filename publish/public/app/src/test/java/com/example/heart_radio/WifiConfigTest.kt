@@ -6,7 +6,7 @@ import org.junit.Test
 class WifiConfigTest {
     private val suffix = "|" + "ab".repeat(32) + "|" + "cd".repeat(32)
     @Test fun acceptsPrivateIpv4AndDecodesCredentials() {
-        val config = WifiConfig.parse("192.168.1.8:8765$suffix")
+        val config = WifiConfig.parse("192.168.1.10:8765$suffix")
         assertEquals(8765, config.port)
         assertEquals(32, config.pinBytes.size)
         assertEquals(0xab.toByte(), config.pinBytes[0])

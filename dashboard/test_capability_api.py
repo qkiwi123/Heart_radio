@@ -10,6 +10,9 @@ from data_policy import DEFAULTS
 
 class CapabilityApiTests(unittest.TestCase):
     def setUp(self):
+        # These tests exercise the legacy service API, independent of saved daily-session state.
+        transport_override=patch.object(server,'transport',Mock(managed=False))
+        transport_override.start();self.addCleanup(transport_override.stop)
         self.service = Mock()
         self.service.status.return_value = dict(running=False, state='stopped', enabledOnStart=False)
         self.service.control.return_value = dict(running=True, state='ready')

@@ -13,7 +13,7 @@ import java.time.Instant
 object Probe {
     val state = ReadingState()
     var logFile: File? = null
-    var logError = ""
+    val logError get() = WatchDiagnostics.error()
     var bleStatus = "蓝牙未开启"
     var wifiStatus = "Wi-Fi 未开启"
     fun bluetoothAllowed(c: Context) = Build.VERSION.SDK_INT < 31 ||
@@ -26,8 +26,7 @@ object Probe {
     fun manager(c: Context) = c.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     fun sensor(c: Context) = manager(c).getDefaultSensor(Sensor.TYPE_HEART_RATE)
     fun startLog(c: Context) {
-        logError = ""
-        val dir = File(c.filesDir, "logs").apply { mkdirs() }
+        val dir = File(c.filesDir, "logs")
         logFile = File(dir, "session-${System.currentTimeMillis()}-${SystemClock.elapsedRealtime()}.jsonl")
     }
     fun log(c: Context, kind: String, fields: Map<String, Any?> = emptyMap()) {
@@ -36,10 +35,8 @@ object Probe {
             .put("elapsedNs", SystemClock.elapsedRealtimeNanos()).put("screenInteractive", screen(c))
             .put("running", state.running).put("registered", state.registered)
         fields.forEach { (k, v) -> row.put(k, v ?: JSONObject.NULL) }
-        try {
-            val dir = File(c.filesDir, "logs").apply { mkdirs() }
-            (logFile ?: File(dir, "lifecycle.jsonl")).appendText(row.toString() + "\n", Charsets.UTF_8)
-        } catch (e: Exception) { logError = "日志写入失败：${e.javaClass.simpleName}: ${e.message}" }
+        val destination=logFile ?: File(c.filesDir,"logs/lifecycle.jsonl")
+        WatchDiagnostics.append(destination,row.toString(),kind !in setOf("event","heartbeat","wifi_packet","wifi_ack"))
     }
     fun inventory(c: Context): String {
         val all = manager(c).getSensorList(Sensor.TYPE_ALL)

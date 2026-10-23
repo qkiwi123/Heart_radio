@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [ValidateSet('Start','View','Stop','StopReceiver','ResourceStart','ResourceStatus','ResourceStop','ResourceReport')][string]$Action='Start',
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$NoBrowser
 )
 $ErrorActionPreference='Stop'
 try {
@@ -14,7 +15,7 @@ try {
         Start='scripts\Start-HeartRadio.ps1'
         View='scripts\Start-Dashboard.ps1'
         Stop='scripts\Stop-HeartRadio.ps1'
-        StopReceiver='scripts\Stop-Receiver.ps1'
+        StopReceiver='scripts\Stop-HeartReception.ps1'
         ResourceStart='scripts\Resource-Test.ps1'
         ResourceStatus='scripts\Resource-Test.ps1'
         ResourceStop='scripts\Resource-Test.ps1'
@@ -40,6 +41,7 @@ try {
     try {
         if ($Action.StartsWith('Resource')) { & $launcherTarget -Action $Action.Substring(8) }
         elseif ($Action -eq 'View') { & $launcherTarget -OpenBrowser }
+        elseif ($Action -eq 'Start') { & $launcherTarget -NoBrowser:$NoBrowser }
         else { & $launcherTarget }
     } finally { Pop-Location }
 } catch {

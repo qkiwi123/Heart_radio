@@ -26,6 +26,7 @@ class CapabilityBridgeService : Service() {
         @Volatile private var snapshot = JSONObject().put("state", "stopped")
         @Volatile private var liveService: CapabilityBridgeService? = null
         fun isRunning(): Boolean = liveService?.active == true
+        fun connected(): Boolean = liveService?.let{it.active&&snapshot.optString("state")=="connected"&&(!it.managedConnection||SystemClock.elapsedRealtime()-it.lastPeerAt<45_000)}==true
         fun state(): JSONObject = liveService?.liveReport() ?: JSONObject(snapshot.toString()).put("leaseRemainingMs", 0)
         fun duration(context: android.content.Context): Long = context.getSharedPreferences("capability-standby", MODE_PRIVATE)
             .getLong("durationMs", BridgeLease.DEFAULT_MS)
@@ -52,6 +53,7 @@ class CapabilityBridgeService : Service() {
                 service.transition(snapshot.optString("state", "connected"), "duration_saved")
                 synchronized(service.retrySignal) { service.retrySignal.notifyAll() }
             }
+            AgentInteraction.updateDuration(context)
             service?.publishState()
             return true
         }
@@ -72,6 +74,13 @@ class CapabilityBridgeService : Service() {
     @Volatile private var syncInstanceId = ""
     @Volatile private var reports: LinkedBlockingQueue<JSONObject>? = null
     private var worker: Thread? = null
+    private var managedConnection = false
+    @Volatile private var lastPeerAt=0L
+    private var receiptSelection=""
+    private val receiptObserver:(JSONObject)->Unit={ row ->
+        if(!managedConnection || ConnectionService.owns("wifi",receiptSelection))
+            reports?.offer(JSONObject(row.toString()).put("id","reminder_receipt").put("selectionId",receiptSelection))
+    }
     private var attempt = 0
     private var sessionId = ""
     private val expiry = object : Runnable {
@@ -91,13 +100,15 @@ class CapabilityBridgeService : Service() {
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate()
-        engine = CapabilityEngine(this, handler)
+        engine = DeviceGateway.engine(this)
         manager = getSystemService(ConnectivityManager::class.java)
         liveService = this
+        ReminderEngine.subscribe(receiptObserver)
     }
     private fun bootCount() = try { Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, -1) }
         catch (_: Exception) { -1 }
     private fun remaining(): Long {
+        if (managedConnection) return Long.MAX_VALUE
         val value = lease ?: return 0
         if (value.durationMs == 0L && value.bootCount < 0) return Long.MAX_VALUE
         // Unknown boot count permits the current instance, but never restoration after process death.
@@ -111,18 +122,23 @@ class CapabilityBridgeService : Service() {
         .put("leaseDurationMs", lease?.durationMs ?: duration(this))
         .put("durationSyncVersion", 1).put("followComputer", followComputer)
         .put("durationSyncRevision", syncRevision).put("durationSyncInstanceId", syncInstanceId)
+        .put("managedConnection",managedConnection).put("connectionControl",ConnectionService.state())
+        .put("agentInteraction",AgentInteraction.state()).put("heartBroadcast",HeartBroadcast.state())
+        .put("heartRunning",Probe.state.running).put("heartRegistered",Probe.state.registered).put("heartDiagnostic",HeartStream.diagnosticJson())
         .put("wallMs", System.currentTimeMillis()).put("elapsedMs", SystemClock.elapsedRealtime())
         .put("screenInteractive", Probe.screen(this))
     private fun notification(): Notification {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, CapabilityActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(this, 1, Intent(this, CapabilityBridgeService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(this, 0, Intent(this, if(managedConnection)MainActivity::class.java else CapabilityActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val stop = PendingIntent.getService(this, 1, Intent(this, if(managedConnection)ConnectionService::class.java else CapabilityBridgeService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, "capability").setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle(if (lease?.durationMs == 0L) "接口待命（不限时）" else "接口待命（已设限时）").setContentText(status)
-            .setContentIntent(open).addAction(Notification.Action.Builder(null, "停止待命", stop).build()).build()
+            .setContentTitle(if(managedConnection)"Wi-Fi连接待命" else if (lease?.durationMs == 0L) "接口待命（不限时）" else "接口待命（已设限时）").setContentText(status)
+            .setContentIntent(open).addAction(Notification.Action.Builder(null, if(managedConnection)"断开连接" else "停止待命", stop).build()).build()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "STOP") { finish("user_stop"); return START_NOT_STICKY }
-        if (active) return if ((lease?.bootCount ?: -1) >= 0) START_STICKY else START_NOT_STICKY
+        if(ProjectSession.suspended){stopSelf(startId);return START_NOT_STICKY}
+        if (intent?.action == "STOP") { if(managedConnection)ConnectionService.stop(this) else finish("user_stop"); return START_NOT_STICKY }
+        if (active) return if (!managedConnection && (lease?.bootCount ?: -1) >= 0) START_STICKY else START_NOT_STICKY
+        managedConnection = intent?.getBooleanExtra("managed_connection",false) == true
         val preferences = getSharedPreferences("capability-standby", MODE_PRIVATE)
         followComputer = preferences.getBoolean("followComputer", false)
         syncRevision = if (followComputer) preferences.getString("syncRevision", "") ?: "" else ""
@@ -134,7 +150,7 @@ class CapabilityBridgeService : Service() {
         }
         val value = if (restored) BridgeLease(preferences.getLong("started", -1), preferences.getLong("deadline", -1),
             preferences.getLong("wallDeadline", -1), preferences.getInt("boot", -1), preferences.getLong("leaseDurationMs", BridgeLease.DEFAULT_MS))
-        else BridgeLease.start(SystemClock.elapsedRealtime(), System.currentTimeMillis(), bootCount(), duration(this))
+        else BridgeLease.start(SystemClock.elapsedRealtime(), System.currentTimeMillis(), bootCount(), if(managedConnection) 0 else duration(this))
         if (restored && (!preferences.getBoolean("enabled", false) || value.bootCount < 0 ||
                     value.remaining(SystemClock.elapsedRealtime(), System.currentTimeMillis(), bootCount()) <= 0)) {
             finish("expired_or_not_enabled"); return START_NOT_STICKY
@@ -156,15 +172,16 @@ class CapabilityBridgeService : Service() {
             startForeground(2, notification(), types)
         } else startForeground(2, notification())
         active = true
+        ProjectSession.monitor(this)
         sessionId = java.util.UUID.randomUUID().toString()
         transition(if (restored) "restored" else "starting")
-        if (value.durationMs != 0L) handler.post(expiry)
+        if (!managedConnection && value.durationMs != 0L) handler.post(expiry)
         try {
             manager.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), networkCallback)
             callbackAdded = true
         } catch (_: RuntimeException) { transition("network_callback_unavailable") }
         worker = Thread({ runConnections() }, "capability-bridge").also { it.start() }
-        return if (value.bootCount >= 0) START_STICKY else START_NOT_STICKY
+        return if (!managedConnection && value.bootCount >= 0) START_STICKY else START_NOT_STICKY
     }
     private fun transition(state: String, reason: String = "", delayMs: Long = 0) {
         if (!active && state != "stopped") return
@@ -177,9 +194,7 @@ class CapabilityBridgeService : Service() {
         synchronized(auditLock) {
             try {
                 val file = File(filesDir, "capability-probe/bridge-events.jsonl")
-                file.parentFile?.mkdirs()
-                if (file.length() > 1_048_576) file.writeText("")
-                file.appendText(row.toString() + "\n")
+                WatchDiagnostics.append(file,row.toString(),true)
             } catch (_: IOException) { /* Connection lifecycle must not depend on diagnostics. */ }
         }
         handler.post {
@@ -251,6 +266,7 @@ class CapabilityBridgeService : Service() {
                     endpointCache.edit().putString("pin", paired.pin).putString("host", endpoint.host).apply()
                     needsDiscovery = false
                     connectedAt = SystemClock.elapsedRealtime()
+                    lastPeerAt=connectedAt
                     status = "电脑已连接；等待按需请求"
                     transition("connected")
                     serve(client, input, output)
@@ -263,7 +279,7 @@ class CapabilityBridgeService : Service() {
                     discoverySocket?.close(); discoverySocket = null
                     closeSocket(); socket = null; boundNetwork = null
                     val cleaned = CountDownLatch(1)
-                    handler.post { engine.cancelAll(); cleaned.countDown() }
+                    handler.post { if(!managedConnection&&liveService===this&&active)engine.cancelAll();cleaned.countDown() }
                     if (active && !cleaned.await(5, TimeUnit.SECONDS)) fatal = true
                 }
                 if (!active) break
@@ -311,6 +327,7 @@ class CapabilityBridgeService : Service() {
         } finally { probe.close(); if (discoverySocket === probe) discoverySocket = null }
     }
     private fun serve(client: SSLSocket, input: DataInputStream, output: DataOutputStream) {
+        var selectionId=""
         val pending = LinkedBlockingQueue<JSONObject>(16)
         reports = pending
         fun write(row: JSONObject) {
@@ -332,10 +349,51 @@ class CapabilityBridgeService : Service() {
                 val size = input.readInt(); require(size in 1..8192)
                 val bytes = ByteArray(size); input.readFully(bytes)
                 val request = JSONObject(String(bytes, Charsets.UTF_8))
+                lastPeerAt=SystemClock.elapsedRealtime()
                 if (remaining() <= 0) break
                 when (request.optString("op")) {
+                    "select_transport" -> handler.post {
+                        if(active&&socket===client){
+                            val identity=request.optJSONObject("params")?.optString("selectionId")?:""
+                            val result=if(managedConnection&&identity.matches(Regex("[0-9a-f]{32}")))ConnectionService.select("wifi",identity)
+                                else JSONObject().put("status","invalid_selection")
+                            if(result.optString("status")=="ok"){selectionId=identity;receiptSelection=identity}
+                            if(!pending.offer(result.put("id",request.optString("id"))))client.close()
+                        }
+                    }
+                    "control_state" -> if(!pending.offer(state().put("id",request.optString("id")).put("status","ok")))throw IOException("result_queue_full")
+                    "sync_interaction" -> handler.post {
+                        if(active && socket===client && !client.isClosed){
+                            val params=request.optJSONObject("params")?:JSONObject()
+                            val result=if(managedConnection && ConnectionService.owns("wifi",selectionId))AgentInteraction.sync(params,selectionId)
+                                else JSONObject().put("status","transport_not_selected")
+                            if(!pending.offer(result.put("id",request.optString("id"))))client.close()
+                        }
+                    }
+                    "sync_broadcast" -> handler.post {
+                        if(active&&socket===client&&!client.isClosed){
+                            val result=if(managedConnection&&ConnectionService.owns("wifi",selectionId))HeartBroadcast.sync(request.optJSONObject("params")?:JSONObject(),selectionId)
+                                else JSONObject().put("status","transport_not_selected")
+                            if(!pending.offer(result.put("id",request.optString("id"))))client.close()
+                        }
+                    }
+                    "sync_reminder_policy" -> handler.post {
+                        if(active&&socket===client&&!client.isClosed){
+                            val result=if(managedConnection&&ConnectionService.owns("wifi",selectionId))ReminderPolicy.sync(request.optJSONObject("params")?:JSONObject(),selectionId)
+                                else JSONObject().put("status","transport_not_selected")
+                            if(!pending.offer(result.put("id",request.optString("id"))))client.close()
+                        }
+                    }
                     "ping" -> if (!pending.offer(state().put("id", request.optString("id")).put("status", "pong"))) throw IOException("result_queue_full")
-                    "stop_bridge" -> { handler.post { finish("computer_stop") }; return }
+                    "stop_bridge" -> {
+                        handler.post {
+                            if(managedConnection){
+                                AgentInteraction.set(this,false)
+                                pending.offer(state().put("id",request.optString("id")).put("status","ok"))
+                            }else finish("computer_stop")
+                        }
+                        if(!managedConnection)return
+                    }
                     "set_standby_duration" -> handler.post {
                         if (active && socket === client && !client.isClosed) {
                             val result = applyComputerDuration(request)
@@ -343,16 +401,26 @@ class CapabilityBridgeService : Service() {
                         }
                     }
                     else -> handler.post {
-                        if (active && socket === client && !client.isClosed && remaining() > 0) engine.execute(request) { result ->
+                        if (active && socket === client && !client.isClosed && remaining() > 0) {
+                            if(managedConnection&&request.optString("op")!="cancel"&&!ConnectionService.owns("wifi",selectionId)){
+                                pending.offer(JSONObject().put("id",request.optString("id")).put("status","transport_not_selected"));return@post
+                            }
+                            DeviceGateway.execute(this,request) { result ->
                             // A completed old request never crosses into a new TLS connection.
                             if (active && socket === client && !client.isClosed && !pending.offer(result)) {
                                 try { client.close() } catch (_: IOException) {}
                             }
                         }
+                        }
                     }
                 }
             }
-        } finally { if (reports === pending) reports = null; client.close(); sender.interrupt(); sender.join(1500) }
+        } finally {
+            val released=CountDownLatch(1)
+            handler.post{if(managedConnection)ConnectionService.release("wifi",selectionId);released.countDown()}
+            if(active)released.await(3,TimeUnit.SECONDS)
+            if (reports === pending) { reports = null;receiptSelection="" }; client.close(); sender.interrupt(); sender.join(1500)
+        }
     }
     private fun publishState() {
         val queue = reports ?: return
@@ -377,7 +445,8 @@ class CapabilityBridgeService : Service() {
                 throw IllegalStateException("duration_save_failed")
             lease = next; syncRevision = revision; syncInstanceId = instance
             handler.removeCallbacks(expiry)
-            if (next.durationMs != 0L) handler.post(expiry)
+            if (managedConnection) AgentInteraction.applyRemaining(if(next.durationMs==0L)null else (next.deadlineElapsedMs-SystemClock.elapsedRealtime()).coerceAtLeast(0))
+            else if (next.durationMs != 0L) handler.post(expiry)
             transition(snapshot.optString("state", "connected"), "computer_duration_synced")
             synchronized(retrySignal) { retrySignal.notifyAll() }
             return state().put("id", id).put("status", "duration_synced")
@@ -387,6 +456,7 @@ class CapabilityBridgeService : Service() {
         }
     }
     private fun finish(reason: String) {
+        if (!managedConnection) AgentInteraction.set(this,false)
         active = false
         getSharedPreferences("capability-standby", MODE_PRIVATE).edit().putBoolean("enabled", false).commit()
         status = if (reason == "configuration_error" || reason == "configuration_or_cleanup_error") "配置或清理失败，请重新开启待命" else "接口待命已停止"
@@ -397,9 +467,11 @@ class CapabilityBridgeService : Service() {
         stopSelf()
     }
     override fun onDestroy() {
+        ReminderEngine.unsubscribe(receiptObserver)
         // Explicit stopService is a stop too. Android process death does not call this method.
         if (active) finish("service_destroyed")
-        engine.cancelAll(); handler.removeCallbacksAndMessages(null)
+        if(!managedConnection&&liveService===this)engine.cancelAll()
+        handler.removeCallbacksAndMessages(null)
         if (callbackAdded) { manager.unregisterNetworkCallback(networkCallback); callbackAdded = false }
         closeSocket(); worker?.interrupt()
         discoverySocket?.close(); discoverySocket = null

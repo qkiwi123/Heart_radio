@@ -16,7 +16,12 @@ import uuid
 from resource_native import Windows
 from capability_duration import MAX_SECONDS, duration_path, read_duration, save_settings
 
+LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+BRIDGE_URL = 'http://127.0.0.1:8768'
+
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'receiver'))
+from diagnostic_log import diagnostic_tail
 
 
 class ServiceError(OSError):
@@ -112,7 +117,7 @@ class CapabilityService:
     def bridge_state():
         # Read PC connection metadata only; polling sends no watch sensor request.
         try:
-            with urllib.request.urlopen('http://127.0.0.1:8768/state', timeout=.6) as response:
+            with LOCAL_HTTP.open(BRIDGE_URL + '/state', timeout=.6) as response:
                 raw = response.read(8193)
             value = json.loads(raw) if len(raw) <= 8192 else None
             return value if isinstance(value, dict) else None
@@ -182,11 +187,14 @@ class CapabilityService:
                 except OSError as error:
                     raise ServiceError(f'端口 {port} 已占用；请先停止已有接口测试或相关服务。不会结束其他进程。') from error
 
-    def start(self, seconds=None, if_enabled=False):
+    def start(self, seconds=None, if_enabled=False, connection_only=False):
         if seconds is None: seconds = read_duration(self.root)['seconds']
         if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 <= seconds <= MAX_SECONDS:
             raise ValueError('电脑按需服务时长为0（不限时）或1秒～365天。')
         if 0 < seconds < 1: raise ValueError('电脑按需服务限时最短1秒。')
+        if connection_only:
+            previous=self.info()
+            if self.owned(previous) and previous.get('connectionOnly') is not True:self.stop(keep_standby=True)
         with self.locked():
             if if_enabled and not self.preference()['enabledOnStart']:
                 return dict(self.status(), action='disabled')
@@ -205,6 +213,7 @@ class CapabilityService:
                        '--directory', str(self.root / '.local-wifi'), '--seconds', str(seconds),
                        '--settings', str(duration_path(self.root)),
                        '--instance-id', instance, '--output', str(directory / 'pc-bridge.jsonl'), '--stop-file', str(stop)]
+            if connection_only:command.append('--connection-only')
             with (directory / 'stdout.txt').open('wb') as out, (directory / 'stderr.txt').open('wb') as err:
                 child = subprocess.Popen(command, cwd=self.root, stdout=out, stderr=err,
                                          creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
@@ -213,6 +222,7 @@ class CapabilityService:
                 process = self.windows.process(child.pid)
                 info = dict(pid=child.pid, creationTicks=str(process['creationTicks']), executable=process['executable'],
                             runId=run_id, instanceId=instance, seconds=seconds,
+                            connectionOnly=connection_only,
                             expiresAtMs=int(time.time_ns() // 1000000 + seconds * 1000) if seconds else None)
                 # Register ownership before waiting so another stop can recover a partial start.
                 atomic_json(self.metadata, info)
@@ -237,13 +247,14 @@ class CapabilityService:
                     raise ServiceError('无法登记按需服务进程；本次创建的进程已停止。')
                 raise
 
-    def stop(self):
+    def stop(self,keep_standby=False):
         with self.locked():
             info = self.info()
             if not self.owned(info):
                 return dict(self.status(), action='already_stopped', watchStopStatus='not_sent')
             directory = self.directory(info)
-            (directory / 'stop.request').touch(exist_ok=True)
+            if keep_standby:(directory/'stop.request').write_text('keep_watch_standby',encoding='utf-8')
+            else:(directory / 'stop.request').touch(exist_ok=True)
             until = time.monotonic() + 8
             while self.owned(info) and time.monotonic() < until:
                 time.sleep(.1)
@@ -251,7 +262,7 @@ class CapabilityService:
                 raise ServiceError('停止请求已写入，但电脑按需服务尚未退出，请稍后查看；未强制终止进程。')
             watch_status = 'not_confirmed'
             try:
-                for line in (directory / 'pc-bridge.jsonl').read_text(encoding='utf-8').splitlines()[-20:]:
+                for line in diagnostic_tail(directory / 'pc-bridge.jsonl'):
                     row = json.loads(line)
                     if row.get('kind') == 'watch_stop_result':
                         watch_status = row.get('status', 'not_confirmed')

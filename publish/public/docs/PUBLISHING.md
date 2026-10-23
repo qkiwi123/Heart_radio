@@ -12,7 +12,7 @@
 .\.venv\Scripts\python.exe scripts\export_public_repo.py
 ```
 
-预览和审计只写入忽略的 `runs/`。确认公开范围、测试和本地提交完成后，生成或更新公开分支：
+预览和审计只写入忽略的 `runs/`。确认公开范围、测试和可发布源文件的本地提交完成后，生成或更新公开分支。IDE、运行数据等明确非发布路径可保留未提交状态；其他源文件/模板必须先提交，未列入白名单的新源码也不能悄悄跳过：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\export_public_repo.py --create-branch --author '自己的公开名称 <自己的GitHub公开noreply邮箱>'

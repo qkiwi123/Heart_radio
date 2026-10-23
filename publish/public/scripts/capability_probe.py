@@ -30,8 +30,8 @@ def request(op, params=None, port=8768):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['provision', 'start', 'stop', 'request', 'screening'])
-    parser.add_argument('--adb', default=r'D:\Android\SDK\platform-tools\adb.exe')
-    parser.add_argument('--serial', help='ADB serial required for provision/start/stop')
+    parser.add_argument('--adb', default='adb')
+    parser.add_argument('--serial', help='ADB serial required for device maintenance')
     parser.add_argument('--port', type=int, default=8767)
     parser.add_argument('--api-port', type=int, default=8768)
     parser.add_argument('--op', default='inventory')
@@ -44,7 +44,7 @@ def main():
     args = parser.parse_args()
     if args.action in ('provision', 'start', 'stop'):
         if not args.serial:
-            parser.error('--serial is required for watch operations')
+            parser.error('--serial is required for device maintenance')
         for prop, expected in [('ro.product.model', 'OW20W2'), ('ro.product.brand', 'OPPO'), ('ro.build.version.sdk', '27')]:
             if adb(args, ['shell', 'getprop', prop]).decode().strip() != expected:
                 raise RuntimeError('Watch identity mismatch')

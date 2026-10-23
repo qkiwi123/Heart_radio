@@ -18,13 +18,13 @@ object ServiceToggleStyle {
         }
         val content = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_selected),
-                surface(Color.rgb(105, 227, 188), Color.rgb(151, 241, 214)))
-            addState(intArrayOf(), surface(Color.rgb(38, 54, 47), Color.rgb(74, 96, 84)))
+                surface(WatchUi.selected, WatchUi.accent))
+            addState(intArrayOf(), surface(WatchUi.surface, WatchUi.border))
         }
         button.backgroundTintList = null
         button.background = RippleDrawable(ColorStateList.valueOf(Color.argb(65, 255, 255, 255)), content, null)
         button.setTextColor(ColorStateList(
             arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf(android.R.attr.state_selected), intArrayOf()),
-            intArrayOf(Color.rgb(170, 190, 182), Color.rgb(11, 37, 29), Color.rgb(223, 233, 227))))
+            intArrayOf(WatchUi.muted, Color.WHITE, Color.rgb(239, 233, 237))))
     }
 }

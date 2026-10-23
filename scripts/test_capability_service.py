@@ -131,6 +131,19 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(ServiceError): self.service.stop()
         self.assertFalse((Path(self.temp.name) / 'outside').exists())
 
+    def test_stop_receipt_survives_rotation_and_compressed_final_segment(self):
+        from diagnostic_log import DiagnosticLog,maintain
+        import time
+        self.register()
+        directory=self.service.directory(self.info);directory.mkdir(parents=True)
+        path=directory/'pc-bridge.jsonl';log=DiagnosticLog(path,max_bytes=10)
+        log.write(json.dumps(dict(kind='watch_stop_result',status='watch_offline'))+'\n')
+        log.write(json.dumps(dict(kind='bridge_stop'))+'\n');log.close()
+        maintain(self.service.root,now=time.time()+3*86400)
+        self.assertFalse(path.exists())
+        self.service._windows.process.side_effect=[dict(creationTicks=12345,executable=self.info['executable']),OSError('gone'),OSError('gone'),OSError('gone')]
+        self.assertEqual(self.service.stop()['watchStopStatus'],'watch_offline')
+
     def test_port_conflict_fails_before_launch_and_keeps_preference(self):
         self.service.save(dict(enabledOnStart=True))
         paired = self.service.root / '.local-wifi'; paired.mkdir()

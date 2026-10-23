@@ -1,1 +1,1 @@
-D:\Android\heartradio
+<YOUR_PROJECT_ABSOLUTE_PATH>

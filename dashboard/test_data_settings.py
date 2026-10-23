@@ -19,7 +19,7 @@ class PolicyTests(unittest.TestCase):
         self.policy.save(value)
         self.assertEqual(DataPolicy(self.temp.name).read(), value)
         before = self.policy.path.read_bytes()
-        for change in (dict(measurementSeconds=True), dict(measurementCooldownSeconds=14),
+        for change in (dict(measurementSeconds=True), dict(measurementCooldownSeconds=-1),
                        dict(sensorCacheSeconds=301), dict(pcServiceSeconds=61),
                        dict(allowedMetrics=['pressure','pressure']),dict(allowedMetrics=['location'])):
             with self.assertRaises(ValueError): self.policy.save(dict(value, **change))
@@ -63,7 +63,7 @@ class SharedSettingsTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][1]['seconds'],7)
 
     def test_reusing_sensor_cache_does_not_measure_and_fresh_still_obeys_cooldown(self):
-        self.settings(sensorCacheSeconds=60)
+        self.settings(sensorCacheSeconds=60,measurementCooldownSeconds=15)
         first=self.access.call('measure_pressure',{})
         second=self.access.call('measure_pressure',{})
         self.assertEqual(first['requestId'],second['requestId'])
@@ -75,7 +75,7 @@ class SharedSettingsTests(unittest.TestCase):
         self.assertEqual(replacement.call('measure_pressure',dict(fresh=True))['status'],'rate_limited')
 
     def test_failed_cached_result_is_never_returned_as_a_reusable_success(self):
-        self.settings(sensorCacheSeconds=60)
+        self.settings(sensorCacheSeconds=60,measurementCooldownSeconds=15)
         self.raw['status']='request_timeout'
         self.access.call('measure_pressure',{})
         self.assertEqual(self.access.call('measure_pressure',{})['status'],'rate_limited')
@@ -94,7 +94,7 @@ class SharedSettingsTests(unittest.TestCase):
         worker=threading.Thread(target=lambda:result.append(self.access.call('measure_pressure',{})))
         worker.start();self.addCleanup(lambda:worker.join(3))
         self.assertTrue(sampled.wait(3))
-        self.assertEqual(self.access.call('measure_pressure',{})['status'],'busy')
+        self.assertEqual(self.access.call('measure_pressure',dict(seconds=5))['status'],'busy')
         self.assertEqual(self.access.call('cancel_measurement',dict(request_id='a'*32))['status'],'no_active_measurement')
         active=self.access.measurement_state()
         self.assertEqual(self.access.call('cancel_measurement',dict(request_id=active['requestId']))['status'],'cancel_requested')
@@ -104,7 +104,7 @@ class SharedSettingsTests(unittest.TestCase):
         self.assertIsNone(result[0]['value'])
         self.assertTrue(result[0]['listenersReleased'])
         self.assertIsNone(self.access.measurement_state())
-        self.assertTrue(self.access.measure_lock.acquire(blocking=False));self.access.measure_lock.release()
+        self.assertTrue(self.access.call('measure_pressure',dict(seconds=1))['status']=='cancelled')
 
     def test_cancelling_during_inventory_never_starts_a_sensor(self):
         preparing=threading.Event();release=threading.Event();result=[]
@@ -121,7 +121,8 @@ class SharedSettingsTests(unittest.TestCase):
         self.access.bridge=lambda *args,**kwargs:(_ for _ in ()).throw(OSError('closed'))
         with self.assertRaises(OSError):self.access.call('measure_pressure',{})
         self.assertIsNone(self.access.measurement_state())
-        self.assertTrue(self.access.measure_lock.acquire(blocking=False));self.access.measure_lock.release()
+        self.access.bridge=self.bridge
+        self.assertTrue(self.access.call('measure_pressure',{})['ok'])
 
 
 if __name__=='__main__':unittest.main()

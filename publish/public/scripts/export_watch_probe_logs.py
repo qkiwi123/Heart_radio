@@ -12,7 +12,7 @@ PACKAGE = 'dev.local.watch2.hrprobe'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--adb', default=r'D:\Android\SDK\platform-tools\adb.exe')
+    parser.add_argument('--adb', default='adb')
     parser.add_argument('--serial', required=True)
     args = parser.parse_args()
     output = args.output.resolve()

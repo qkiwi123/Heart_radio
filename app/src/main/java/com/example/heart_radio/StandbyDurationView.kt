@@ -14,18 +14,19 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
     init {
         orientation = VERTICAL
         fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
-        fun label(value: String) = TextView(context).apply { text = value; textSize = 11f; setTextColor(Color.rgb(170,190,182)) }
+        fun label(value: String) = TextView(context).apply { text = value; textSize = 11f; setTextColor(WatchUi.muted) }
         val saved = CapabilityBridgeService.duration(context)
         val follow = CheckBox(context).apply {
             text = "跟随电脑设置"; textSize = 12f; setTextColor(Color.WHITE)
-            buttonTintList = ColorStateList.valueOf(Color.rgb(105,227,188))
-            isChecked = CapabilityBridgeService.followsComputer(context)
+            buttonTintList = ColorStateList.valueOf(WatchUi.accent)
+            isChecked = false
             contentDescription = "待命跟随电脑设置"
         }
         addView(follow)
+        follow.visibility=View.GONE // Shared gate carries the actual lease in either transport.
         val unlimited = CheckBox(context).apply {
             text = "不限时"; textSize = 12f; setTextColor(Color.WHITE)
-            buttonTintList = ColorStateList.valueOf(Color.rgb(105,227,188)); isChecked = saved == 0L
+            buttonTintList = ColorStateList.valueOf(WatchUi.accent); isChecked = saved == 0L
             contentDescription = "待命不限时"
         }
         addView(unlimited)
@@ -33,7 +34,7 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
         val amount = EditText(context).apply {
             textSize = 14f; setTextColor(Color.WHITE); setSingleLine(true)
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setBackgroundColor(Color.rgb(38,54,47)); setPadding(dp(8),dp(8),dp(8),dp(8))
+            setBackgroundColor(WatchUi.surface); setPadding(dp(8),dp(8),dp(8),dp(8))
             contentDescription = "待命限制时长数值"
         }
         val unit = Spinner(context).apply {
@@ -47,7 +48,7 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
                 override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
                     TextView(context).apply {
                         text = getItem(position); textSize = 12f; setTextColor(Color.WHITE)
-                        setBackgroundColor(Color.rgb(38,54,47)); gravity = Gravity.CENTER_VERTICAL
+                        setBackgroundColor(WatchUi.surface); gravity = Gravity.CENTER_VERTICAL
                         minHeight = dp(44); setPadding(dp(8),0,dp(8),0)
                     }
             }
@@ -69,7 +70,7 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
         val message = label("")
         val save = Button(context).apply {
             text = "保存设置"; textSize = 12f; isAllCaps = false
-            backgroundTintList = ColorStateList.valueOf(Color.rgb(105,227,188)); setTextColor(Color.rgb(11,37,29))
+            WatchUi.action(this,primary=true)
             contentDescription = "保存待命时长"
             setOnClickListener {
                 try {
@@ -84,6 +85,6 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
         }
         addView(save,LayoutParams(-1,dp(44)).apply { topMargin = dp(8) })
         addView(message)
-        addView(label("跟随电脑：由仪表盘统一设置，连接后同步剩余时间；未连上前保留本地期限。独立模式默认30分钟，保存立即生效；未开启时只保存。重连不续期。"),LayoutParams(-1,-2).apply { topMargin = dp(6) })
+        addView(label("开启交互时使用本端时长；运行中保存会同步新期限。未开启时只保存下次偏好。重连及重复同步不续期。"),LayoutParams(-1,-2).apply { topMargin = dp(6) })
     }
 }

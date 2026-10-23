@@ -9,8 +9,6 @@ if (Get-NetTCPConnection -State Listen -LocalPort 8767,8768 -ErrorAction Silentl
 $probeDirectory = Join-Path $probeRoot ('evidence\capability-probe\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $probeDirectory | Out-Null
 if (!$ComputerOnly) {
-    $watch = & (Join-Path $PSScriptRoot 'Get-Watch.ps1') -Serial $Serial
-    $Serial = $watch.Serial
     & $Python (Join-Path $probeRoot 'scripts\capability_probe.py') provision --serial $Serial
     if ($LASTEXITCODE -ne 0) { throw '本应用私有测试配置写入失败。' }
 }

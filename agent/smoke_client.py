@@ -29,7 +29,7 @@ def main():
     expected = [message['id'] for message in messages if 'id' in message]
     if [response.get('id') for response in responses] != expected: raise RuntimeError('Incorrect response IDs or stdout pollution')
     if any('error' in response for response in responses): raise RuntimeError('MCP protocol error')
-    required = {'get_capabilities','get_heart_rate','get_device_status','measure_pressure','measure_motion','cancel_measurement'}
+    required = {'get_capabilities','get_heart_rate','get_device_status','measure_pressure','measure_motion','cancel_measurement','send_reminder','get_reminder_status','measure_heart_rate'}
     if required - {tool['name'] for tool in responses[1]['result']['tools']}: raise RuntimeError('Missing tools')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(requests=messages, responses=responses, stderr=result.stderr.decode('utf-8')), ensure_ascii=False, indent=2), encoding='utf-8')

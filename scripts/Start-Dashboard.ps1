@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([switch]$OpenBrowser)
+param([switch]$OpenBrowser,[switch]$EnsureCurrent)
 $ErrorActionPreference='Stop'
 $taskRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskState=Join-Path $taskRoot 'runs\dashboard.json'
@@ -11,6 +11,16 @@ try {
         $taskInfo=Get-Content -LiteralPath $taskState -Raw | ConvertFrom-Json
         $taskExisting=Get-Process -Id $taskInfo.pid -ErrorAction SilentlyContinue
         $taskRunning=$taskExisting -and $taskExisting.StartTime.ToUniversalTime().Ticks -eq ([DateTime]$taskInfo.processStartUtc).ToUniversalTime().Ticks
+    }
+    if ($taskRunning -and $EnsureCurrent) {
+        $taskExpected=& (Join-Path $taskRoot '.venv\Scripts\python.exe') (Join-Path $taskRoot 'dashboard\build_identity.py')
+        if ($LASTEXITCODE -ne 0 -or $taskExpected -notmatch '^[0-9a-f]{64}$') { throw '无法核对电脑服务源码版本，未停止现有服务。' }
+        $taskVersion=$null
+        try { $taskVersion=Invoke-RestMethod -Uri 'http://127.0.0.1:8766/api/version' -TimeoutSec 2 } catch { }
+        if (!$taskVersion -or $taskVersion.serverBuild -ne $taskExpected) {
+            & "$PSScriptRoot\Stop-Dashboard.ps1" -Confirm:$false
+            $taskRunning=$false
+        }
     }
     if (!$taskRunning) {
         if (Get-NetTCPConnection -State Listen -LocalPort 8766 -ErrorAction SilentlyContinue) { throw '8766端口已有其他程序，未结束它。' }

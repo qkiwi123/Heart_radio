@@ -109,11 +109,4 @@ for(const[id,key]of [['historyYear','year'],['historyMonth','month'],['historyDa
 });
 $('historyRun').addEventListener('change',()=>{historyUi.selection.run=$('historyRun').value;loadHistory();});
 $('historyRefresh').addEventListener('click',loadHistoryCatalog);
-function historyView(show){
- $('liveView').hidden=show;$('historyView').hidden=!show;$('liveExport').hidden=show;
- for(const[id,selected]of [['viewLive',!show],['viewHistory',show]]){$(id).classList.toggle('selected',selected);$(id).setAttribute('aria-selected',String(selected));}
- text('pageTitle',show?'按年月日，回看心率。':'看见此刻的心率。');
- if(show)loadHistoryCatalog();else if(lastState)chart(lastState);
-}
-$('viewHistory').addEventListener('click',()=>historyView(true));$('viewLive').addEventListener('click',()=>historyView(false));
-let historyResizeTimer;window.addEventListener('resize',()=>{clearTimeout(historyResizeTimer);historyResizeTimer=setTimeout(()=>{if(!$('historyView').hidden&&historyUi.result)drawHistory(historyUi.result);else if(lastState)chart(lastState);},120);});
+let historyResizeTimer;window.addEventListener('resize',()=>{clearTimeout(historyResizeTimer);historyResizeTimer=setTimeout(()=>{if(!$('historyView').hidden&&historyUi.result)drawHistory(historyUi.result);},120);});

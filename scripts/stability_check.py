@@ -32,7 +32,10 @@ class MCPClient:
             self.call('initialize',dict(protocolVersion='2025-06-18'))
             self.write(dict(jsonrpc='2.0',method='notifications/initialized'))
             tools=self.call('tools/list',{})['tools']
-            if len(tools)!=6:raise RuntimeError('Unexpected MCP tool count')
+            required={'get_capabilities','get_heart_rate','get_device_status','measure_pressure','measure_motion','cancel_measurement'}
+            names={tool['name'] for tool in tools}
+            if not required<=names or names-required-{'send_reminder','get_reminder_status','measure_heart_rate'}:
+                raise RuntimeError('Unexpected MCP tool catalog')
         except BaseException:
             self.close(); raise
 

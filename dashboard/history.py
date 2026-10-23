@@ -169,7 +169,8 @@ class HistoryStore:
                 if kind != 'packet':
                     continue
                 packet = row['packet']
-                next_session = str(packet['session']) if type(packet.get('session')) is int else ''
+                identity=packet.get('session')
+                next_session=str(identity) if type(identity) is int or isinstance(identity,str) and re.fullmatch('[A-Za-z0-9_-]{1,64}',identity) else ''
                 if session != next_session or row.get('sequenceStep') not in (None, 1):
                     segment += 1
                 session = next_session
