@@ -1,6 +1,14 @@
-# HeartRadio：手表、电脑与 Agent 的本地协作
+# HeartRadio：基于MCP的穿戴设备接入电脑agent
 
-面向 OPPO Watch 2（OW20W2 / Android API27）的个人项目：连续心率、按需读取、立即提醒、Windows 仪表盘与桌面小窗，以及独立 stdio MCP。当前源码为电脑 **1.12.0-dashboard**、手表 **1.11.2-retention / code45**、MCP **0.7.0 / 11项工具**。克隆源码不表示你的设备已安装或环境已配置。
+HeartRadio 将 OPPO Watch 2 接入 Windows 电脑，让手表采集的心率可以在本机保存，也让电脑上的 Agent 能通过 MCP 与手表交互。
+
+- **健康数据传输与本地保存**：手表通过蓝牙或局域网 Wi-Fi 将心率数据传到电脑，保存为本地历史记录。可以在仪表盘查看实时心率、查询历史并导出 CSV。
+- **通过 MCP 读取手表数据**：电脑上的 Agent 可以读取电量等设备状态，也可以按需获取心率、气压、加速度等传感器数据。
+- **通过 MCP 向手表发送提醒**：Agent 可以立即发送文字提醒，按用户设置搭配振动、亮屏或提示音，并查询提醒回执与用户确认状态。
+
+从手表获取新数据或发送提醒前，需要连接手表、开启 Agent 交互，并等待两端同步。
+
+目前适配 OPPO Watch 2（OW20W2 / Android API27）。当前源码为电脑 **1.12.0-dashboard**、手表 **1.11.2-retention / code45**、MCP **0.7.0 / 11项工具**。克隆源码不表示你的设备已安装或环境已配置。
 
 **AI 接手先读[源码状态与边界](docs/PROJECT-STATUS.md)，操作看[日常使用](docs/DAILY-USE.md)，工具调用看[MCP契约](docs/MCP-CONTRACT.md)。**
 
@@ -22,4 +30,6 @@
 - [11项工具的参数来源、副作用与结果含义](docs/MCP-CONTRACT.md)
 - [公开源码范围与更新流程](docs/PUBLISHING.md)
 
-Windows 本地网页为 `http://127.0.0.1:8766`。蓝牙不要求两端同一Wi-Fi；选择Wi-Fi时需要可互通的局域网与本地TLS配对。Agent不自动开启连接或业务；云端模型仍可能接收工具返回的数据。本项目没有承诺跨设备通用、全天稳定、开机自启或强制停止后远程唤醒。
+在 Windows 完成[环境准备](docs/SETUP.md)后，运行根目录的 [Start-HeartRadio.cmd](Start-HeartRadio.cmd) 即可打开本地仪表盘（`http://127.0.0.1:8766`）。仓库也提供 [桌面入口 01～08](launchers/desktop)。
+
+蓝牙不要求两端同一Wi-Fi；选择Wi-Fi时需要可互通的局域网与本地TLS配对。Agent不自动开启连接或业务；云端模型仍可能接收工具返回的数据。本项目没有承诺跨设备通用、全天稳定、开机自启或强制停止后远程唤醒。

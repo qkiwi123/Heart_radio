@@ -7,10 +7,21 @@ param(
 $ErrorActionPreference='Stop'
 try {
     $launcherConfig=Join-Path $PSScriptRoot 'project-path.txt'
-    if (!(Test-Path -LiteralPath $launcherConfig -PathType Leaf)) { throw 'Missing project-path.txt next to this launcher.' }
-    $launcherRoot=[IO.File]::ReadAllText($launcherConfig,[Text.Encoding]::UTF8).Trim()
-    if (![IO.Path]::IsPathRooted($launcherRoot)) { throw 'project-path.txt must contain an absolute project path.' }
-    $launcherRoot=[IO.Path]::GetFullPath($launcherRoot)
+    $launcherConfiguredPath=if (Test-Path -LiteralPath $launcherConfig -PathType Leaf) {
+        [IO.File]::ReadAllText($launcherConfig,[Text.Encoding]::UTF8).Trim()
+    } else { '' }
+    if (!$launcherConfiguredPath -or $launcherConfiguredPath -eq '<YOUR_PROJECT_ABSOLUTE_PATH>') {
+        $launcherRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        if (!(Test-Path -LiteralPath (Join-Path $launcherRoot 'Start-HeartRadio.cmd') -PathType Leaf)) {
+            throw 'Outside the project, set project-path.txt next to this launcher to your absolute project path.'
+        }
+    } else {
+        # IsPathRooted also accepts drive-relative paths such as C:folder on Windows.
+        if ($launcherConfiguredPath -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))') {
+            throw 'project-path.txt must contain an absolute Windows path (drive and folder, or UNC share).'
+        }
+        $launcherRoot=[IO.Path]::GetFullPath($launcherConfiguredPath)
+    }
     $launcherRoutes=@{
         Start='scripts\Start-HeartRadio.ps1'
         View='scripts\Start-Dashboard.ps1'
@@ -26,7 +37,10 @@ try {
         throw "Project entry not found: $launcherTarget. Check project-path.txt."
     }
     if ($Action -in @('Start','View')) {
-        foreach ($launcherDependency in @('.venv\Scripts\python.exe','dashboard\server.py','desktop-widget\build\HeartRadioWidgets.exe','scripts\capability_service.py','scripts\Capability-Service.ps1','scripts\data_policy.py','scripts\capability_duration.py','receiver\control.py','receiver\capability_bridge.py')) {
+        if (!(Test-Path -LiteralPath (Join-Path $launcherRoot '.venv\Scripts\python.exe') -PathType Leaf)) {
+            throw 'Missing .venv\Scripts\python.exe. Create a Python virtual environment in the project root (see the setup guide).'
+        }
+        foreach ($launcherDependency in @('dashboard\server.py','scripts\start_logged.py','scripts\capability_service.py','scripts\Capability-Service.ps1','scripts\data_policy.py','scripts\capability_duration.py','receiver\control.py','receiver\capability_bridge.py')) {
             if (!(Test-Path -LiteralPath (Join-Path $launcherRoot $launcherDependency) -PathType Leaf)) {
                 throw "Required project file is missing: $launcherDependency"
             }

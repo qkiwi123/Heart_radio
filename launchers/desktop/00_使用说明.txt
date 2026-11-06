@@ -1,4 +1,5 @@
-先在project-path.txt填写自己的项目绝对路径；保留本目录全部入口及Launch-HeartRadio.ps1。
+在项目的launchers/desktop目录内直接运行时，project-path.txt可留空或保留占位值，入口会按文件位置找到项目。
+若复制到桌面等项目外的位置，请整套复制，保留Launch-HeartRadio.ps1，并在同目录的project-path.txt填入项目绝对路径。
 01启动/复用仪表盘和连接管理，02仅打开网页，03停止本项目电脑服务，04仅暂停电脑心率接收，05～08管理本地资源观察。
 首次构建和配对见项目docs/SETUP.md，日常规则见docs/DAILY-USE.md，MCP见docs/LOCAL-AGENT.md。
 网页：http://127.0.0.1:8766。连接、心率广播、Agent交互分开控制，不因启动MCP自动开启。

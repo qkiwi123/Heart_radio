@@ -12,10 +12,9 @@
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r receiver\requirements.txt
 .\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
-.\scripts\Build-Widgets.ps1
 ```
 
-本地依赖已经缓存时可给Gradle添加--offline。桌面小窗由Windows的.NET Framework编译器构建；图标已随源码提供，不需要为正常使用重新生成。
+本地依赖已经缓存时可给Gradle添加--offline。桌面小窗是可选功能，需要时再运行 `.\scripts\Build-Widgets.ps1`，使用 Windows 的 .NET Framework 编译器构建；网页仪表盘无需先构建小窗。图标已随源码提供，不需要重新生成。
 
 ## 手表安装
 
@@ -44,4 +43,6 @@ py -3 -m venv .venv
 
 ## 启动入口
 
-可直接使用根目录Start-HeartRadio.cmd和Stop-HeartRadio.cmd。若使用桌面01～08，复制launchers/desktop全部文件，在project-path.txt中填写自己的项目绝对路径；保留同目录Launch-HeartRadio.ps1。先用01开启电脑管理，再在手表按需要开启连接、连续心率或Agent交互。详细开关与期限见[日常使用](DAILY-USE.md)。MCP需另行[导出并接入](LOCAL-AGENT.md)，不自动修改Agent配置。
+在 Windows 完成上述电脑环境准备后，可以运行项目根目录的 `Start-HeartRadio.cmd` 和 `Stop-HeartRadio.cmd`；入口按文件位置找到项目。换电脑或移动项目后，在新位置重新创建 `.venv` 并安装依赖，避免沿用指向旧 Python 路径的环境。
+
+桌面 01～08 也可以在项目的 `launchers/desktop` 目录里直接运行，`project-path.txt` 保留占位值或留空即可。若要把入口放到项目目录外，请整套复制，保留 `Launch-HeartRadio.ps1`，并在同目录的 `project-path.txt` 填写自己的项目绝对路径。使用 01 开启电脑管理后，在手表按需要开启连接、连续心率或 Agent 交互。详细开关与期限见[日常使用](DAILY-USE.md)。MCP 需另行[导出并接入](LOCAL-AGENT.md)。

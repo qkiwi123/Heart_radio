@@ -25,9 +25,10 @@ try {
     if (!$taskRunning) {
         if (Get-NetTCPConnection -State Listen -LocalPort 8766 -ErrorAction SilentlyContinue) { throw '8766端口已有其他程序，未结束它。' }
         New-Item -ItemType Directory -Path (Join-Path $taskRoot 'runs') -Force | Out-Null
-        $taskArgs=@('-u',('"'+(Join-Path $taskRoot 'dashboard\server.py')+'"'))
-        $taskProc=Start-Process -FilePath (Join-Path $taskRoot '.venv\Scripts\python.exe') -ArgumentList $taskArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $taskRoot 'runs\dashboard.stdout.txt') -RedirectStandardError (Join-Path $taskRoot 'runs\dashboard.stderr.txt')
+        $taskStdout=Join-Path $taskRoot 'runs\dashboard.stdout.txt'
+        $taskStderr=Join-Path $taskRoot 'runs\dashboard.stderr.txt'
+        $taskArgs=@('-u',('"'+(Join-Path $PSScriptRoot 'start_logged.py')+'"'),('"'+$taskStdout+'"'),('"'+$taskStderr+'"'),('"'+(Join-Path $taskRoot 'dashboard\server.py')+'"'))
+        $taskProc=Start-Process -FilePath (Join-Path $taskRoot '.venv\Scripts\python.exe') -ArgumentList $taskArgs -WorkingDirectory ([WildcardPattern]::Escape($taskRoot)) -WindowStyle Hidden -PassThru
         $taskDeadline=[DateTime]::UtcNow.AddSeconds(8)
         $taskReady=$false
         while ([DateTime]::UtcNow -lt $taskDeadline) {

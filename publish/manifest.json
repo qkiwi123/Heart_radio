@@ -313,6 +313,7 @@
     "scripts/resource_monitor.py",
     "scripts/resource_native.py",
     "scripts/resource_report.py",
+    "scripts/start_logged.py",
     "scripts/stability_check.py",
     "scripts/test_capability_duration.py",
     "scripts/test_capability_service.py",

@@ -16,7 +16,8 @@ if ($PSCmdlet.ShouldProcess("本项目仪表盘 PID $($taskExisting.Id)",'停止
         $taskOwnedApi=$taskVersion.pid -eq $taskExisting.Id
         if (!$taskOwnedApi -and $taskVersion.pid) {
             $taskApiProcess=Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$taskVersion.pid)" -ErrorAction Stop
-            $taskOwnedApi=$taskApiProcess.ParentProcessId -eq $taskExisting.Id -and $taskApiProcess.CommandLine -like "*$taskRoot\dashboard\server.py*"
+            $taskServerPattern=[WildcardPattern]::Escape((Join-Path $taskRoot 'dashboard\server.py'))
+            $taskOwnedApi=$taskApiProcess.ParentProcessId -eq $taskExisting.Id -and $taskApiProcess.CommandLine -like "*$taskServerPattern*"
         }
         if ($taskOwnedApi) {
             $taskBody=@{action='stop'}|ConvertTo-Json -Compress
