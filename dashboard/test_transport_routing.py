@@ -19,6 +19,33 @@ class RoutingTests(unittest.TestCase):
     def enable(self):
         self.access.control(dict(action='agent_on'));self.access._sync_once()
     def select(self):self.access._route_once()
+    def test_stress_requires_managed_route_and_same_interaction_until_reply(self):
+        self.access.managed = False
+        self.assertEqual(self.access.request('health_stress', {})['status'], 'interaction_disabled')
+        self.access._raw.assert_not_called()
+        self.access.managed = True
+        self.select()
+        self.enable()
+        def close_interaction(route, op, params, identity):
+            self.access._edit_interaction(False)
+            return dict(id=identity, status='ok', score=47)
+        self.access._raw.side_effect = close_interaction
+        result = self.access.request('health_stress', {}, 'test-stress')
+        self.assertEqual(result['status'], 'interaction_changed')
+        self.assertNotIn('score', result)
+
+    def test_reselecting_live_bluetooth_does_not_invent_a_disconnect_or_another_handshake(self):
+        rows = []
+        self.access.cache.record = rows.append
+        self.access._observe(dict(event='hello'))
+        self.select()
+        self.access._drop_route()
+        self.select()
+        self.access._observe(dict(event='disconnected'))
+        self.assertEqual([r['kind'] for r in rows if r['kind'] != 'route_changed'],
+                         ['rfcomm_connected', 'rfcomm_disconnected'])
+        self.assertEqual(self.access.cache.state.disconnects, 1)
+
     def test_authenticated_selection_requires_watch_ack_not_just_socket(self):
         self.access._raw.return_value=dict(status='transport_not_allowed');self.access._raw.side_effect=None
         self.select();self.assertIsNone(self.access.selected)
@@ -57,6 +84,23 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.access.selected,'wifi');self.assertNotEqual(self.access.selection_id,old)
         self.access.stop.assert_not_called();self.access.start.assert_not_called();self.access._stop_wifi_adapter.assert_not_called();self.access._stop_bluetooth_adapter.assert_called_once()
         self.assertFalse(self.access.agent_enabled)
+    def test_adding_standby_wifi_keeps_inflight_bluetooth_frames(self):
+        self.access.configured_mode='rfcomm'
+        self.access.manager_thread=Mock()
+        self.access._observe(dict(event='hello'))
+        self.select()
+        identity=self.access.selection_id
+        def observe(sequence):
+            self.access._observe(dict(event='heart', selectionId=identity, heartAttemptId='attempt',
+                                      sequence=sequence, valid=True, bpm=74, accuracy=3, watchReceiptMs=100))
+        observe(60)
+        self.access.control(dict(action='set_mode',mode='auto_bluetooth'))
+        observe(61)
+        observe(62)
+        self.assertEqual(self.access.selection_id, identity)
+        self.assertEqual(self.access.cache.state.valid_count, 3)
+        self.assertEqual(self.access.cache.state.sequence_gaps, 0)
+
     def test_preference_change_reselects_without_restarting_either_adapter(self):
         self.select();self.access.manager_thread=Mock();self.access.manager_thread.is_alive.return_value=True
         self.access.stop=Mock();self.access.start=Mock();self.access._stop_bluetooth_adapter=Mock();self.access._stop_wifi_adapter=Mock()

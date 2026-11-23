@@ -34,12 +34,21 @@ object AgentInteraction {
             restored.expire();commit(restored)
         }catch(_:Exception){storageError="交互状态无法恢复，请关闭后重试";closeEffects()}
         schedule()
+        if (enabled()) ProjectSession.monitor(context)
     }
     private fun wire(s:GateSnapshot)=InteractionJson.wire(s)
     private fun parse(s:JSONObject)=InteractionJson.parse(s)
     private fun JSONObject.keySet():Set<String> = keys().asSequence().toSet()
+    private fun applySleepListener() {
+        val update = Runnable { NativeSleepState.interactionChanged(context, enabled()) }
+        if (Looper.myLooper() == Looper.getMainLooper()) update.run() else handler.post(update)
+    }
     private fun closeEffects(){
-        val close=Runnable { DeviceGateway.cancelAll("interaction_disabled");ReminderEngine.cancelAll("interaction_closed");RfcommProbeService.cancelEffects() }
+        val close=Runnable {
+            SleepProbe.stopInteractive("interaction_disabled")
+            NativeSleepState.interactionChanged(context, false)
+            DeviceGateway.cancelAll("interaction_disabled");ReminderEngine.cancelAll("interaction_closed");RfcommProbeService.cancelEffects()
+        }
         if(Looper.myLooper()==Looper.getMainLooper())close.run() else handler.post(close)
     }
     private fun commit(next:InteractionSync) {
@@ -53,6 +62,7 @@ object AgentInteraction {
         if(changed)confirmedFingerprint=""
         if(!gate.enabled && (before || changed))closeEffects()
         schedule()
+        if(gate.enabled)applySleepListener()
     }
     private fun schedule(){
         handler.removeCallbacks(expiry)
@@ -66,7 +76,7 @@ object AgentInteraction {
     }
     @Synchronized fun enabled():Boolean {checkExpiry();return !ProjectSession.suspended && storageError.isEmpty() && gate.enabled}
     @Synchronized fun pauseSession(){handler.removeCallbacks(expiry);closeEffects()}
-    @Synchronized fun resumeSession(){checkExpiry();schedule()}
+    @Synchronized fun resumeSession(){checkExpiry();schedule();applySleepListener()}
     @Synchronized fun needsRepair()=storageError.isNotEmpty()
     @Synchronized fun set(ctx:Context,value:Boolean) {
         if(value && storageError.isNotEmpty())return

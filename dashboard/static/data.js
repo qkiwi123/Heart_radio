@@ -5,7 +5,19 @@
  const age=value=>!value?'尚未读取':`${ago(value.cacheAgeSeconds)}收到${value.cacheReusable?' · 可复用缓存':' · 下次重新读取'}`;
  const errors={interaction_disabled:'Agent 交互已关闭，可在电脑或手表任一端开启。',interaction_sync_pending:'交互设置等待另一端确认，确认后才能执行新的设备操作。',watch_offline:'手表尚未连接，请检查独立的连接开关。',bridge_unavailable:'电脑连接服务尚不可用，请检查连接状态。',busy:'本项已有不同采集时长的请求，其他指标仍可读取。',rate_limited:'本项需要等待设置的间隔，其他指标仍可读取。',window_complete:'测量窗口结束，接口没有返回数据。',request_timeout:'请求超时，没有获得新数据。',disconnected:'接口连接已断开，没有获得新数据。',no_valid_samples:'返回的样本无效。',disabled_by_settings:'此指标已在读取设置中关闭。',cancelled:'本次测量已取消；采集中取得的部分样本不作为新结果。',cleanup_unconfirmed:'手表未确认资源释放，本次不显示测量值。',no_active_measurement:'当前没有对应的进行中测量。',measurement_already_finished:'对应测量已经结束。'};
  Object.assign(errors,{timeout:'本次等待结束，未取得有效心率。',no_contact:'本次未取得接触有效的心率，请确认佩戴。',no_valid_data:'收到回调但没有通过有效性检查，本次未返回数值。',registration_failed:'心率监听注册失败。'});
- const names={heart_rate:'心率',device_status:'电量与状态',pressure:'气压',accelerometer:'加速度',gyroscope:'陀螺仪'};
+ const names={heart_rate:'心率',device_status:'电量与状态',pressure:'气压',stress:'身心压力',accelerometer:'加速度',gyroscope:'陀螺仪'};
+ const toolMetrics={get_device_status:'device_status',measure_pressure:'pressure',get_user_state:'stress',measure_heart_rate:'heart_rate'};
+ const metricForButton=button=>button.dataset.kind||toolMetrics[button.dataset.tool];
+ const stressErrors={
+  accessibility_disabled:'请在手表无障碍设置中开启“HeartRadio 压力点测（实验）”。',
+  disabled_by_settings:'请先在健康设置中允许实时读取佩戴状态。',
+  off_wrist:'手表未佩戴，本次未开始测量。',wear_unconfirmed:'未能确认佩戴，本次未开始测量。',
+  busy:'已有测量或健康读取正在进行。',skipped_moving:'已知佩戴者正在活动，已跳过测量。',
+  stock_page_left:'测量时离开了原厂页面，本次未取得分数。',stock_measurement_active:'原厂已有测量正在进行。',
+  stock_page_unavailable:'无法打开原厂压力页。',stock_page_unreadable:'无法读取原厂压力页。',
+  interaction_changed:'测量期间交互许可已变更，本次结果已舍弃。',watch_update_required:'请升级手表上的 HeartRadio。',
+  no_fresh_result:'本次测量失败，等待结束仍未取得新分数。',stock_no_valid_reading:'原厂提示“未测得有效值”，本次测量失败。'
+ };
  const pendingMetrics=new Set();
  const cancellingRequests=new Set();
  const activeRows=new Map();
@@ -22,9 +34,9 @@
   const count=active.length+preparing;
   byId('dataActiveState').textContent=count?`${count}项正在读取，各项独立结束${preparing?`（${preparing}项准备中）`:''}`:'当前没有测量';
   for(const button of document.querySelectorAll('[data-tool]')){
-   const metric=button.dataset.kind||(button.dataset.tool==='measure_heart_rate'?'heart_rate':button.dataset.tool==='measure_pressure'?'pressure':'device_status');
+   const metric=metricForButton(button);
    const reading=pendingMetrics.has(metric)||(activeMeasurement?.requests||[]).some(row=>row.metric===metric);
-   button.disabled=reading||!lastSettings.allowedMetrics.includes(metric);
+   button.disabled=reading||(metric!=='stress'&&!lastSettings.allowedMetrics.includes(metric));
    button.setAttribute('aria-busy',String(reading));
    if(!button.dataset.idleLabel)button.dataset.idleLabel=button.textContent;
    button.textContent=reading?`${names[metric]}读取中…`:button.dataset.kind?`采集${lastSettings.measurementSeconds}秒${names[metric]}`:button.dataset.idleLabel;
@@ -53,7 +65,8 @@
     const label=document.createElement('span'),cancel=document.createElement('button');cancel.type='button';cancel.dataset.cancelRequest=row.requestId;
     line.append(label,cancel);holder.append(line);item={line,label,cancel};activeRows.set(row.requestId,item);
    }
-   item.label.textContent=`${names[row.metric]} · ${row.cancelRequested?'正在取消，等待释放':row.phase==='preparing'?'正在准备':`采集中，最多${row.seconds}秒`}`;
+   const progress=row.metric==='stress'?'等待原厂压力页结果':`采集中，最多${row.seconds}秒`;
+   item.label.textContent=`${names[row.metric]} · ${row.cancelRequested?'正在取消，等待释放':row.phase==='preparing'?'正在准备':progress}`;
    item.cancel.textContent=`取消${names[row.metric]}`;item.cancel.disabled=row.cancelRequested||cancellingRequests.has(row.requestId);
   }
   renderButtons();
@@ -75,8 +88,7 @@
   const incoming=value.durationSettings;
   if(value.sharedInteraction){
    const left=value.remainingSeconds;
-   byId('capabilityLimitStatus').textContent=!value.running?`交互已关闭 · 本端下次开启：${savedDuration?.seconds===0?'不限时':`${(savedDuration?.seconds||0)/60} 分钟`}`:
-    `当前交互：${left==null?'不限时':`剩余 ${Math.max(0,Math.ceil(left-elapsed))} 秒`} · ${value.syncStatus||'待确认'}`;
+   byId('capabilityLimitStatus').textContent=`${agentDurationText(value.running,left==null?null:left-elapsed)} · ${value.syncStatus||'待确认'}`;
    return;
   }
   if(!value.running){byId('capabilityLimitStatus').textContent=savedDuration?`下次启动：${savedDuration.seconds===0?'不限时':`${savedDuration.seconds/60} 分钟`} · 当前电脑按需服务未运行`:'当前电脑按需服务未运行';return}
@@ -119,7 +131,7 @@
    savedDuration=await serviceRequest('/api/capability-duration',{unlimited:byId('capabilityUnlimited').checked,amount:Number(byId('capabilityAmount').value),unit:byId('capabilityUnit').value},'capability-duration');
    durationDirty=revision!==durationRevision;
    if(!durationDirty)showDuration(savedDuration);
-   byId('capabilityDurationMessage').textContent=durationDirty?'刚才提交的时长已保存，后续修改尚未保存。':savedDuration.seconds===0?'已保存：不限时。':'已保存：限时从本次保存开始计算；下次启动按完整时长重新计时。';
+   byId('capabilityDurationMessage').textContent=durationDirty?'已保存本端开启偏好。表单里还有待保存的修改。':'已保存本端开启偏好';
    await refreshService();setTimeout(refreshService,350);
   }catch(error){byId('capabilityDurationMessage').textContent=error.message}finally{byId('capabilityDurationSave').disabled=false}
  });
@@ -163,7 +175,23 @@
  }
  byId('dataCancel').addEventListener('click',()=>cancelRead());
  byId('dataActiveRequests').addEventListener('click',event=>{const button=event.target.closest('[data-cancel-request]');if(button)cancelRead(button.dataset.cancelRequest)});
+ function renderStress(result){
+  byId('dataStress').textContent=result?.ok?`${result.score} 分`:'—';
+  if(result?.ok){
+   const when=new Date(result.observedAtMs).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
+   const saved=result.archiveStatus==='saved'?' · 已归档':result.archiveStatus==='storage_error'?' · 归档失败':' · 未归档';
+   byId('dataResult_stress').textContent=`${when} 读到原厂分数，活动中的准确度未经验证。${saved}`;
+  }else{
+   byId('dataResult_stress').textContent=result?.message||stressErrors[result?.status]||errors[result?.status]||`未取得本次分数（${result?.status||'未知'}）。`;
+  }
+  byId('dataResult_stress').dataset.tone=result?.ok?'success':'error';
+ }
+ window.addEventListener('heartradio-stress-result',event=>renderStress(event.detail));
  function render(data){
+  const savedStress=data.latestStress;
+  byId('dataStressArchive').textContent=savedStress
+   ?`最近归档：${savedStress.score} 分 · ${new Date(savedStress.observedAtMs).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}`
+   :data.stressArchiveError?'压力归档暂不可读':'暂无压力归档';
   if(data.settings)renderSettings(data.settings);renderActive(data.measurement||null);
   const bridge=data.bridge||{}, report=bridge.watchLifecycle, elapsed=bridge.watchReportAgeSeconds;
   const left=report?.leaseRemainingMs!=null?Math.max(0,report.leaseRemainingMs/1000-(elapsed||0)):null;
@@ -200,20 +228,63 @@
   const poll=async()=>{if(window.heartRadioStopped)return;await refreshCache();readPollTimer=!window.heartRadioStopped&&pendingMetrics.size?setTimeout(poll,500):null};
   readPollTimer=setTimeout(poll,200);
  }
- async function refresh(){if(window.heartRadioStopped)return;try{await Promise.all([refreshCache(),refreshService()])}finally{if(!window.heartRadioStopped)setTimeout(refresh,5000)}}
+ const healthForm=byId('healthSettingsForm');
+ let healthDirty=false,healthSaving=false;
+ const healthInputSet=(key,property)=>[...healthForm.querySelectorAll(`[data-health-${key}]:checked`)].map(input=>input.dataset[property]);
+ async function refreshHealth(){
+  if(!healthForm)return;
+  try{
+   const response=await fetch('/api/health-settings',{cache:'no-store'});
+   if(!response.ok)throw Error('健康设置暂不可读');
+   const {settings,sync}=await response.json();
+   if(!healthDirty&&!healthSaving){
+    byId('healthArchive').checked=settings.archiveEnabled;
+    for(const input of healthForm.querySelectorAll('[data-health-history]'))input.checked=settings.historyMetrics.includes(input.dataset.healthHistory);
+    for(const input of healthForm.querySelectorAll('[data-health-live]'))input.checked=settings.liveMetrics.includes(input.dataset.healthLive);
+   }
+   if(!healthSaving)byId('healthSettingsSave').disabled=false;
+   const labels={disabled:'归档已关闭',waiting_for_interaction:'等待手表连接和双端交互许可',checking:'正在核对最新数据',syncing:'正在同步历史',up_to_date:'本轮核对完成',partial:'部分同步，等待复查',settings_error:'健康设置暂不可读'};
+   const last=sync.lastSelfCheckAtMs?new Date(sync.lastSelfCheckAtMs).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):null;
+   byId('healthSyncStatus').textContent=(labels[sync.status]||'等待同步')+(last?` · 上次自检 ${last}`:'');
+  }catch(error){byId('healthSyncStatus').textContent=error.message}
+ }
+ if(healthForm){
+  healthForm.addEventListener('input',()=>{healthDirty=true});
+  healthForm.addEventListener('submit',async event=>{
+   event.preventDefault();
+   const value={archiveEnabled:byId('healthArchive').checked,historyMetrics:healthInputSet('history','healthHistory'),liveMetrics:healthInputSet('live','healthLive')};
+   healthSaving=true;healthDirty=false;byId('healthSettingsSave').disabled=true;
+   try{
+    await serviceRequest('/api/health-settings',value,'health-settings');
+    byId('healthSettingsMessage').textContent='健康设置已保存。';
+   }catch(error){healthDirty=true;byId('healthSettingsMessage').textContent=error.message}
+   finally{healthSaving=false;byId('healthSettingsSave').disabled=false;await refreshHealth()}
+  });
+ }
+ async function refresh(){if(window.heartRadioStopped)return;try{await Promise.all([refreshCache(),refreshService(),refreshHealth()])}finally{if(!window.heartRadioStopped)setTimeout(refresh,5000)}}
  for(const button of document.querySelectorAll('[data-tool]'))button.addEventListener('click',async()=>{
-  const name=button.dataset.tool,metric=button.dataset.kind||(name==='measure_heart_rate'?'heart_rate':name==='measure_pressure'?'pressure':'device_status');
+  const name=button.dataset.tool,metric=metricForButton(button);
   if(pendingMetrics.has(metric))return;
   pendingMetrics.add(metric);renderButtons();
   pollWhileReading();
-  const argumentsValue=byId('dataFresh').checked&&name!=='measure_heart_rate'?{fresh:true}:{};
+  const argumentsValue=byId('dataFresh').checked&&!['heart_rate','stress'].includes(metric)?{fresh:true}:{};
   if(button.dataset.kind)argumentsValue.kind=button.dataset.kind;
   byId('dataResult_'+metric).textContent=name==='get_device_status'?'正在查询…':name==='measure_heart_rate'?'正在读取，最多15秒；其他按钮仍可使用…':`正在采集${lastSettings.measurementSeconds}秒…`;
   byId('dataResult_'+metric).dataset.tone='progress';
+  if(metric==='stress'){
+   argumentsValue.metrics=['stress'];
+   byId('dataStress').textContent='—';
+   byId('dataResult_stress').textContent='正在确认佩戴并等待原厂结果，压力页最多等待 65 秒。';
+  }
   try{
    const response=await fetch('/api/tools',{method:'POST',headers:{'Content-Type':'application/json','X-HeartRadio-Action':'tools'},body:JSON.stringify({name,arguments:argumentsValue})});
-   const result=await response.json();if(!response.ok)throw Error(result.error||'本地请求失败');
-   byId('dataResult_'+metric).textContent=result.ok?(result.cached?`复用了约${Math.floor(result.cacheAgeSeconds)}秒前的结果。`:result.sharedInFlight?'共用了正在进行的采集，已完成。':name==='get_device_status'?'状态已读取；电池温度不是体温。':'采集完成，已释放本项监听。'):(errors[result.status]||`没有可用新数据：${result.status}`)+(result.retryAfterSeconds?` 本项约${result.retryAfterSeconds}秒后可重试。`:'');
+   let result=await response.json();if(!response.ok)throw Error(result.error||'本地请求失败');
+   if(metric==='stress'){
+    result=result.stress||{ok:false,status:result.status};
+    renderStress(result);
+   }else{
+    byId('dataResult_'+metric).textContent=result.ok?(result.cached?`复用了约${Math.floor(result.cacheAgeSeconds)}秒前的结果。`:result.sharedInFlight?'共用了正在进行的采集，已完成。':name==='get_device_status'?'状态已读取；电池温度不是体温。':'采集完成，已释放本项监听。'):(errors[result.status]||`没有可用新数据：${result.status}`)+(result.retryAfterSeconds?` 本项约${result.retryAfterSeconds}秒后可重试。`:'');
+   }
    byId('dataResult_'+metric).dataset.tone=result.ok?'success':'error';
    const cache=await fetch('/api/data',{cache:'no-store'});if(cache.ok)render(await cache.json());
   }catch(error){byId('dataResult_'+metric).textContent=error.message;byId('dataResult_'+metric).dataset.tone='error'}

@@ -54,7 +54,7 @@ class RuleTests(unittest.TestCase):
         value=self.run_rule();encoded=json.dumps(value,ensure_ascii=False,allow_nan=False)
         self.assertLess(len(encoded),1500)
         self.assertNotIn('bins',encoded);self.assertNotIn('samples',encoded);self.assertNotIn('awake',value)
-        self.assertEqual(value['wearBasis'],'service_available_assumption')
+        self.assertNotIn('wearBasis', value)
 
 
 class StateToolTests(unittest.TestCase):
@@ -69,31 +69,44 @@ class StateToolTests(unittest.TestCase):
             typ=self.sensors[params['sensorId']-1]['type'];return dict(window(typ,[2]*30),id=request_id)
         raise AssertionError(op)
     def test_fresh_bounded_observation_and_no_new_history_or_old_cache_replacement(self):
-        value=self.access.call('get_user_state',{})
+        value=self.access.call('get_user_state', {'metrics':['heart_rate','accelerometer','gyroscope']}, wear_confirmed=True)
         self.assertEqual(value['tier'],3)
         self.assertEqual(len([x for x in self.calls if x[0]=='motion_window']),2)
         self.assertTrue(all(x[1]['seconds']==30 for x in self.calls if x[0]=='motion_window'))
         self.assertFalse((self.access.directory/'latest.json').exists())
         self.assertFalse((self.access.directory/'tools.jsonl').exists())
         self.assertIsNone(self.access.measurement_state())
-    def test_required_metric_permission_is_checked_before_any_watch_call(self):
+    def test_denied_sensor_does_not_block_an_allowed_selected_sensor(self):
         settings=self.access.policy.read();settings['allowedMetrics'].remove('gyroscope');self.access.policy.save(settings)
-        self.assertEqual(self.access.call('get_user_state',{})['status'],'disabled_by_settings');self.assertEqual(self.calls,[])
+        result = self.access.call('get_user_state', {'metrics':['accelerometer','gyroscope']}, wear_confirmed=True)
+        self.assertEqual(result['status'], 'partial')
+        self.assertIsNone(result['tier'])
+        self.assertTrue(result['results']['accelerometer']['ok'])
+        self.assertEqual(result['results']['gyroscope']['status'], 'disabled_by_settings')
+        self.assertEqual([params['sensorId'] for op, params in self.calls if op == 'motion_window'], [1])
+
+    def test_single_sensor_returns_only_its_summary(self):
+        result = self.access.call('get_user_state', {'metrics':['gyroscope']}, wear_confirmed=True)
+        self.assertEqual(set(result['results']), {'gyroscope'})
+        self.assertTrue(result['results']['gyroscope']['ok'])
+        self.assertIsNone(result['tier'])
+        self.assertNotIn('heartRate', result)
+        self.assertEqual([params['sensorId'] for op, params in self.calls if op == 'motion_window'], [2])
     def test_heart_permission_is_respected_and_optional_for_tier_three(self):
         settings=self.access.policy.read();settings['allowedMetrics'].remove('heart_rate');self.access.policy.save(settings)
         self.access.heart_snapshot=lambda:(_ for _ in ()).throw(AssertionError('heart must not be read'))
-        self.assertEqual(self.access.call('get_user_state',{})['tier'],3)
+        self.assertEqual(self.access.call('get_user_state', {'metrics':['heart_rate','accelerometer','gyroscope']}, wear_confirmed=True)['tier'],3)
     def test_old_watch_is_explicit_and_unknown_arguments_never_measure(self):
         original=self.bridge
         def old(op,params=None,request_id=None):
             value=original(op,params,request_id);value.pop('motionWindowVersion',None);return value
         self.access.bridge=old
-        value=self.access.call('get_user_state',{});self.assertIsNone(value['tier']);self.assertEqual(value['reason'],'watch_update_required')
+        value=self.access.call('get_user_state', {'metrics':['heart_rate','accelerometer','gyroscope']}, wear_confirmed=True);self.assertIsNone(value['tier']);self.assertEqual(value['reason'],'watch_update_required')
         self.assertFalse(any(x[0]=='motion_window' for x in self.calls))
         with self.assertRaises(ValueError):self.access.call('get_user_state',dict(seconds=30))
     def test_parallel_state_calls_are_not_duplicate_measurements(self):
         self.access.state_lock.acquire()
-        try:self.assertEqual(self.access.call('get_user_state',{})['status'],'busy');self.assertEqual(self.calls,[])
+        try:self.assertEqual(self.access.call('get_user_state', {'metrics':['heart_rate','accelerometer','gyroscope']}, wear_confirmed=True)['status'],'busy');self.assertEqual(self.calls,[])
         finally:self.access.state_lock.release()
     def test_cancellation_releases_both_windows_and_does_not_produce_a_tier(self):
         entered={1:threading.Event(),2:threading.Event()};released={1:threading.Event(),2:threading.Event()}
@@ -107,7 +120,7 @@ class StateToolTests(unittest.TestCase):
             return dict(status='cancelled',listenersReleased=True,requestWakeLockHeldAtResult=False)
         self.access.bridge=bridge
         with ThreadPoolExecutor(max_workers=1) as worker:
-            result=worker.submit(self.access.call,'get_user_state',{})
+            result=worker.submit(self.access.call,'get_user_state', {'metrics':['heart_rate','accelerometer','gyroscope']}, wear_confirmed=True)
             try:
                 self.assertTrue(entered[1].wait(2));self.assertTrue(entered[2].wait(2))
                 self.access.cancel();self.assertIsNone(result.result(3)['tier'])

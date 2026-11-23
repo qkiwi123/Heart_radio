@@ -8,6 +8,9 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.*
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -34,6 +37,8 @@ class MainActivity : Activity() {
     private lateinit var heartToggleButton: Button
     private lateinit var standbyToggleButton: Button
     private lateinit var standbyStatus: TextView
+    private lateinit var standbyDurationView: StandbyDurationView
+    private var sleepProbeStatus: TextView? = null
     private lateinit var reminderPolicyView:ReminderPolicyView
     private lateinit var recentRemindersButton:Button
     private var heartControlBusyUntil = 0L
@@ -145,10 +150,21 @@ class MainActivity : Activity() {
         controls.addSpaced(standbyToggleButton, 6)
         standbyStatus = text(11f, muted)
         controls.addSpaced(standbyStatus, 5)
+        if (NativeHealth.supported()) {
+            val sleepControls = column()
+            sleepProbeStatus = text(11f, muted).also { sleepControls.addSpaced(it, 0) }
+            sleepControls.addSpaced(button("离线睡眠监听（最多 9 小时）") { SleepProbe.startOffline(this) })
+            sleepControls.addSpaced(button("防强停测试（最多 2 小时）") { SleepProbe.start(this, SleepProbe.Mode.WORKING_STATE); render() })
+            sleepControls.addSpaced(button("短测（90 秒）") { SleepProbe.start(this, SleepProbe.Mode.SMOKE); render() })
+            sleepControls.addSpaced(button("开始睡眠探测") { SleepProbe.start(this, SleepProbe.Mode.OVERNIGHT); render() })
+            sleepControls.addSpaced(button("停止并保存") { SleepProbe.stop(); render() })
+            section(controls, "原厂睡眠探测", sleepControls)
+        }
         controls.addSpaced(entry("使用设置  ›") { pager.showPage(2) }, 12)
 
         val (_, settings) = page("使用设置")
-        section(settings, "交互时长", StandbyDurationView(this))
+        standbyDurationView = StandbyDurationView(this)
+        section(settings, "Agent 交互时长", standbyDurationView)
         reminderPolicyView = ReminderPolicyView(this)
         section(settings, "提醒效果限制", reminderPolicyView)
         val connectionSettings = column()
@@ -163,17 +179,19 @@ class MainActivity : Activity() {
         section(settings, "连接设置", connectionSettings)
         val diagnostics = column()
         diagnostics.addSpaced(button("公开接口短时测试") { startActivity(Intent(this, CapabilityActivity::class.java)) }, 0)
-        diagnostics.addSpaced(button("旧蓝牙独立测试") { startActivity(Intent(this, RfcommProbeActivity::class.java)) }, 6)
-        diagnostics.addSpaced(button("旧 BLE 连接诊断（会采集）") { connectComputer() }, 6)
-        diagnostics.addSpaced(button("旧 BLE 广播诊断（会采集）") {
-            if (ConnectionService.running() || Probe.state.running) Probe.bleStatus = "请先关闭主页面连接和心率，再做旧BLE诊断"
-            else if (!Probe.allowed(this)) Probe.bleStatus = "请先授予身体传感器权限"
-            else if (!Probe.bluetoothAllowed(this)) requestPermissions(arrayOf("android.permission.BLUETOOTH_CONNECT", "android.permission.BLUETOOTH_ADVERTISE"), 11)
-            else try { startForegroundService(Intent(this, CaptureService::class.java).setAction("BLE_START")) }
-            catch (e: Exception) { Probe.bleStatus = "蓝牙启动失败：${e.message}" }
-            render()
-        }, 6)
-        bleDetail = text(11f, muted).also { diagnostics.addSpaced(it, 6) }
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            diagnostics.addSpaced(button("旧蓝牙独立测试") { startActivity(Intent(this, RfcommProbeActivity::class.java)) }, 6)
+            diagnostics.addSpaced(button("旧 BLE 连接诊断（会采集）") { connectComputer() }, 6)
+            diagnostics.addSpaced(button("旧 BLE 广播诊断（会采集）") {
+                if (ConnectionService.running() || Probe.state.running) Probe.bleStatus = "请先关闭主页面连接和心率，再做旧BLE诊断"
+                else if (!Probe.allowed(this)) Probe.bleStatus = "请先授予身体传感器权限"
+                else if (!Probe.bluetoothAllowed(this)) requestPermissions(arrayOf("android.permission.BLUETOOTH_CONNECT", "android.permission.BLUETOOTH_ADVERTISE"), 11)
+                else try { startForegroundService(Intent(this, CaptureService::class.java).setAction("BLE_START")) }
+                catch (e: Exception) { Probe.bleStatus = "蓝牙启动失败：${e.message}" }
+                render()
+            }, 6)
+            bleDetail = text(11f, muted).also { diagnostics.addSpaced(it, 6) }
+        }
         counts = text(11f, muted)
         detail = text(12f)
         section(diagnostics, "采集详情", column().apply { addSpaced(counts, 0); addSpaced(sourceNote, 8); addSpaced(detail, 8) })
@@ -277,8 +295,20 @@ class MainActivity : Activity() {
     private fun render() {
         val st = Probe.state; val now = SystemClock.elapsedRealtimeNanos(); val allowed = Probe.allowed(this)
         reminderPolicyView.refresh()
-        val unread=ReminderEngine.unreadCount()
-        recentRemindersButton.show(if(unread>0)"最近提醒 · ${unread}未确认  ›" else "最近提醒  ›")
+        val unread = ReminderEngine.unreadCount()
+        if (unread > 0) {
+            val prefix = "最近提醒 · "
+            val count = "${unread}未确认"
+            val label = "$prefix$count  ›"
+            if (recentRemindersButton.text.toString() != label) {
+                recentRemindersButton.text = SpannableString(label).apply {
+                    setSpan(ForegroundColorSpan(accent), prefix.length, prefix.length + count.length,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+        } else {
+            recentRemindersButton.show("最近提醒  ›")
+        }
         val sensor = Probe.sensor(this)
         val current = st.recentValue(now)?.takeIf { allowed && sensor != null }
         bpm.show(current?.let { "%.0f".format(Locale.US, it) } ?: "—")
@@ -296,7 +326,10 @@ class MainActivity : Activity() {
         connectionToggleButton.show(if(ConnectionService.running())"断开连接" else "开启连接")
         connectionToggleButton.contentDescription=if(ConnectionService.running())"断开手表与电脑连接" else "开启手表与电脑连接"
         connectionToggleButton.isSelected=ConnectionService.running()
-        val connectionText=if(ProjectSession.suspended)"未连接满10分钟，全部服务已停止\n点开启连接，恢复原先功能" else ConnectionService.status
+        val connectionText = if (ProjectSession.suspended) {
+            val offline = if (SleepProbe.offlineRunning()) "\n离线睡眠监听仍在本机运行" else ""
+            "未连接满10分钟，已暂停连接与交互\n点开启连接，恢复原先功能$offline"
+        } else ConnectionService.status
         connectionState.show(connectionText)
         connectionDetail.show(connectionText)
         heartState.show(HeartBroadcast.state().optString("syncStatus"))
@@ -305,8 +338,9 @@ class MainActivity : Activity() {
         standbyToggleButton.isSelected=standbyRunning
         standbyToggleButton.isEnabled=SystemClock.uptimeMillis()>=standbyControlBusyUntil
         val gate=AgentInteraction.state()
-        val timing=if(standbyRunning&&!gate.isNull("remainingMs"))" · 剩余${gate.optLong("remainingMs")/1000}秒" else ""
-        standbyStatus.show("${if(standbyRunning)"读取与提醒已允许$timing" else "读取与提醒已关闭"}\n${gate.optString("syncStatus")}${if(!ConnectionService.connected())" · 离线" else ""}")
+        standbyStatus.show("${StandbyDurationView.currentLabel(gate)}\n${gate.optString("syncStatus")}${if(!ConnectionService.connected())" · 离线" else ""}")
+        standbyDurationView.showCurrent(gate)
+        sleepProbeStatus?.show(SleepProbe.status)
         if(st.running&&!ConnectionService.connected())status.show("${HeartStream.diagnosticJson().optString("message")} · 未传输")
         counts.show("回调 ${st.callbacks}  ·  有效 ${st.validCount}")
         val last = if (st.lastWallMs == 0L) "—" else SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(st.lastWallMs))

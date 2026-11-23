@@ -101,6 +101,8 @@ class Windows:
             while ok:
                 found[item.pid] = dict(pid=item.pid, parent=item.parent, threads=item.threads, name=item.name)
                 ok = self.k.Process32NextW(handle, c.byref(item))
+            if c.get_last_error() != 18:  # ERROR_NO_MORE_FILES marks a complete process snapshot.
+                raise c.WinError(c.get_last_error())
             return found
         finally:
             self.k.CloseHandle(handle)

@@ -52,6 +52,22 @@ class ProtocolTests(unittest.TestCase):
 
 
 class RequestTests(unittest.TestCase):
+    def test_daily_sync_log_is_reconstructable_across_changes_errors_and_refresh(self):
+        self.probe.record_heart = lambda: True
+        record = self.probe.diagnostic_message
+        def reply(i, enabled=True):
+            return dict(op='sync_interaction', status='ok', id=str(i),
+                        interaction=dict(enabled=enabled, remainingMs=90000-i))
+        with patch('rfcomm_probe.time.monotonic', side_effect=[1,2,3,64,65]):
+            self.assertEqual(record(reply(1)), reply(1))
+            short = record(reply(2))
+            self.assertEqual((short['stateFromReply'],short['remainingMs']), ('1',89998))
+            self.assertEqual(record(reply(3,False)), reply(3,False))
+            self.assertEqual(record(reply(4,False)), reply(4,False))
+            error = dict(op='sync_interaction', status='busy')
+            self.assertEqual(record(error), error)
+            self.assertEqual(record(reply(5,False)), reply(5,False))
+
     def test_heart_sample_has_a_fifteen_second_bound_before_bluetooth(self):
         value=dict(op='heart_sample',params=dict(sensorId=0,seconds=15))
         self.assertEqual(self.probe.request(value)['status'],'watch_offline')

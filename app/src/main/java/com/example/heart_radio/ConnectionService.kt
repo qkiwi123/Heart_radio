@@ -1,6 +1,7 @@
 package com.example.heart_radio
 
 import android.app.*
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -60,6 +61,7 @@ class ConnectionService : Service() {
     private var bluetoothOwned=false
     private var wifiOwned=false
     private var nextBluetooth=0L
+    private var lastBluetoothWait: String? = null
     private var nextWifi=0L
     private val handler=Handler(Looper.getMainLooper())
     private val heartObserver:(Int)->Unit={kind->if(kind!=1||canPublish("wifi"))wifi?.publish(kind)}
@@ -71,10 +73,19 @@ class ConnectionService : Service() {
         val now=SystemClock.elapsedRealtime();val allowed=TransportSelection.allowed(selected)
         if("rfcomm" in allowed&&!RfcommProbeService.running()&&now>=nextBluetooth){
             nextBluetooth=now+10_000
-            if(java.io.File(filesDir,"rfcomm-probe.json").isFile){
-                bluetoothOwned=true
-                startForegroundService(Intent(this,RfcommProbeService::class.java).putExtra("managed_connection",true))
+            val waiting = when {
+                !java.io.File(filesDir,"rfcomm-probe.json").isFile -> "missing_config"
+                !Probe.bluetoothAllowed(this) -> "permission_missing"
+                !runCatching { getSystemService(BluetoothManager::class.java).adapter?.isEnabled == true }.getOrDefault(false) -> "radio_unavailable"
+                else -> null
             }
+            if (waiting == null) {
+                Probe.log(this,"bluetooth_listener_requested",emptyMap())
+                if (startAdapter(RfcommProbeService::class.java)) bluetoothOwned=true
+            } else if (waiting != lastBluetoothWait) {
+                Probe.log(this,"bluetooth_listener_wait",mapOf("reason" to waiting))
+            }
+            lastBluetoothWait = waiting
         }
         if("wifi" in allowed&&now>=nextWifi){
             nextWifi=now+10_000
@@ -83,10 +94,16 @@ class ConnectionService : Service() {
                 wifi=WifiTransport(this,WifiConfig.parse(code),{canPublish("wifi")}).also{it.start()}
             }catch(_:Exception){Probe.wifiStatus="Wi-Fi未配置，等待连接设置"}
             if(!CapabilityBridgeService.isRunning()&&java.io.File(filesDir,"capability-bridge.json").isFile){
-                wifiOwned=true
-                startForegroundService(Intent(this,CapabilityBridgeService::class.java).putExtra("managed_connection",true))
+                if (startAdapter(CapabilityBridgeService::class.java)) wifiOwned=true
             }
         }
+    }
+    private fun startAdapter(adapter: Class<out Service>): Boolean = try {
+        // The connection owner is already foreground. A child may reject startup before promotion.
+        startService(Intent(this,adapter).putExtra("managed_connection",true)) != null
+    } catch (error: RuntimeException) {
+        Probe.log(this,"connection_adapter_start_failed",mapOf("adapter" to adapter.simpleName,"error" to error.javaClass.simpleName))
+        false
     }
     private fun closeAdapters(){
         route.session?.let{route.release(route.transport!!,it)};DeviceGateway.cancelAll()
@@ -129,6 +146,7 @@ class ConnectionService : Service() {
         return START_NOT_STICKY
     }
     override fun onDestroy(){
+        SleepProbe.stopInteractive("connection_stopped")
         active=false;handler.removeCallbacksAndMessages(null);HeartStream.unsubscribe(heartObserver);closeAdapters()
         if(!status.startsWith("连接启动失败")&&!ProjectSession.suspended)status="连接已断开"
         Probe.log(this,"connection_control_stop",mapOf("heartContinues" to Probe.state.running,"interactionEnabled" to AgentInteraction.enabled()))

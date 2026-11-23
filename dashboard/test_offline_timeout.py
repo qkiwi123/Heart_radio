@@ -34,12 +34,16 @@ class OfflineShutdownTests(unittest.TestCase):
             with patch('transport_access.time.monotonic',return_value=600):access._check_offline_timeout()
             self.assertTrue(access.session['suspended']);self.assertFalse(access.agent_enabled)
             self.assertTrue(access.manager_stop.is_set());access.on_gate_closed.assert_called_once()
+            self.assertTrue(access.state()['projectSession']['shutdownPending'])
+            with self.assertRaisesRegex(ValueError,'电脑端正在退出'):
+                access.control(dict(action='start'))
             self.assertEqual(before,{p:p.read_bytes() for p in files})
             restored=TransportAccess(root)
             self.assertTrue(restored.session['suspended'])
             self.assertTrue(restored.cache.receiving)
             with patch.object(restored,'wifi_state',return_value=dict(connected=False)):
-                self.assertTrue(restored.state()['projectSession']['suspended'])
+                session=restored.state()['projectSession']
+                self.assertTrue(session['suspended']);self.assertFalse(session['shutdownPending'])
 
     def test_selected_wifi_or_bluetooth_prevents_idle_exit(self):
         for route in ('rfcomm','wifi'):

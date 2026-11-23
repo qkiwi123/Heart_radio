@@ -5,6 +5,15 @@ from transport_access import HeartCache, TransportAccess
 
 
 class HeartCacheTests(unittest.TestCase):
+    def test_bluetooth_retry_cleanup_only_records_established_sessions(self):
+        rows = []
+        cache = HeartCache(rows.append)
+        for event in ('disconnected', 'hello', 'disconnected', 'disconnected', 'hello'):
+            cache.observe(dict(event=event))
+        self.assertEqual([row['kind'] for row in rows],
+                         ['rfcomm_connected', 'rfcomm_disconnected', 'rfcomm_connected'])
+        self.assertEqual((cache.state.connections, cache.state.disconnects), (2, 1))
+
     def setUp(self):
         self.cache=HeartCache()
         self.cache.observe(dict(event='hello',heartRunning=False,heartState='idle'))
@@ -45,6 +54,13 @@ class HeartCacheTests(unittest.TestCase):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_old_mode_names_always_select_the_daily_route(self):
+        with patch.object(self.access, '_change_mode') as change:
+            for self.access.managed in (True, False):
+                for action, mode in [('start_bluetooth','rfcomm'), ('use_legacy_wifi','wifi')]:
+                    self.access.control(dict(action=action))
+                    change.assert_called_with(mode)
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.access=TransportAccess(self.tmp.name)

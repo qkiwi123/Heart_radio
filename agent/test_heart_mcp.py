@@ -44,7 +44,7 @@ class HeartMCPTests(unittest.TestCase):
                         if process.poll() is None:process.kill();process.wait(timeout=5)
                         process.stdout.close();process.stderr.close()
                     self.assertEqual([row['id'] for row in messages],[1,2,3,4])
-                    self.assertEqual(len(messages[1]['result']['tools']),11)
+                    self.assertEqual(len(messages[1]['result']['tools']),13)
                     measured=messages[2]['result'];value=json.loads(measured['content'][0]['text'])
                     self.assertEqual('structuredContent' in measured,version=='2025-06-18')
                     self.assertEqual(wire.call_count,2);self.assertEqual(wire.call_args.args,('heart_sample',dict(sensorId=0,seconds=15)))

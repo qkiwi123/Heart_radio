@@ -3,6 +3,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="com.heytap.accessory.permission.ACCESSORY_FRAMEWORK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -29,12 +30,19 @@
             </intent-filter>
         </activity>
         <activity android:name=".CapabilityActivity" android:exported="true" android:hardwareAccelerated="false" />
-        <activity android:name=".RfcommProbeActivity" android:exported="true" android:hardwareAccelerated="false" />
+        <activity android:name=".RfcommProbeActivity" android:exported="${exportBluetoothDiagnostics}" android:hardwareAccelerated="false" />
         <activity android:name=".ReminderActivity" android:exported="false" android:launchMode="singleTask" android:hardwareAccelerated="false" />
         <activity android:name=".ReminderInboxActivity" android:exported="false" android:hardwareAccelerated="false" />
+        <receiver android:name=".SleepProbe$AlarmReceiver" android:exported="false" />
+        <service android:name=".SleepProbe$OfflineService" android:exported="false" android:foregroundServiceType="health" />
         <service android:name=".RfcommProbeService" android:exported="false" android:foregroundServiceType="connectedDevice|health" />
         <service android:name=".CapabilityBridgeService" android:exported="false" android:foregroundServiceType="connectedDevice|health|location" />
         <service android:name=".ConnectionService" android:exported="false" android:foregroundServiceType="connectedDevice" />
+        <service android:name=".StressPageService" android:exported="true"
+            android:label="@string/stress_service_name" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/stress_page_service" />
+        </service>
         <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="health|connectedDevice" android:stopWithTask="false" />
     </application>
 </manifest>

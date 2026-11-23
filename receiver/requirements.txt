@@ -8,4 +8,5 @@ winrt-Windows.Devices.Enumeration==3.2.1
 winrt-Windows.Devices.Radios==3.2.1
 winrt-Windows.Foundation==3.2.1
 winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Networking.Connectivity==3.2.1
 winrt-Windows.Storage.Streams==3.2.1

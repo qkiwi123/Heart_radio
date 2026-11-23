@@ -164,13 +164,15 @@ class HistoryStore:
                 if last_time is not None and (timestamp < last_time or timestamp - last_time > 30000):
                     segment += 1
                 last_time = timestamp
-                if kind in ('server_start', 'server_stop', 'wifi_connected', 'wifi_disconnected'):
+                if kind in ('server_start', 'server_stop', 'wifi_connected', 'wifi_disconnected',
+                            'rfcomm_connected', 'rfcomm_disconnected', 'route_changed'):
                     segment += 1
                 if kind != 'packet':
                     continue
                 packet = row['packet']
-                identity=packet.get('session')
-                next_session=str(identity) if type(identity) is int or isinstance(identity,str) and re.fullmatch('[A-Za-z0-9_-]{1,64}',identity) else ''
+                session_id = packet.get('session')
+                next_session = str(session_id) if (type(session_id) is int or isinstance(session_id, str)
+                              and re.fullmatch('[A-Za-z0-9_-]{1,64}', session_id)) else ''
                 if session != next_session or row.get('sequenceStep') not in (None, 1):
                     segment += 1
                 session = next_session
@@ -288,6 +290,48 @@ class HistoryStore:
                             buckets=buckets, points=points, displayedPoints=len(points),
                             downsampled=level == 'day' and len(points) < stats['validCount'],
                             warnings=self._warnings(db), timezone='北京时间 UTC+8', timeBasis='电脑接收时间')
+
+    def timeline(self, start, end, start_ms, end_ms):
+        """Return bounded chart points and exact per-minute statistics on the receipt clock."""
+        # Align the daily chart buckets with the minutes used for source selection.
+        width = max(1, math.ceil((end_ms-start_ms) / (60000 * (POINT_LIMIT//4)))) * 60000
+        points = []
+        minutes = {}
+        bucket = None
+        first = last = low = high = None
+
+        def emit():
+            if first is not None:
+                for point in sorted({first, last, low, high}, key=lambda item: item[0]):
+                    points.append([point[1], point[2], point[3]])
+
+        with self.lock:
+            self.refresh()
+            with self.connection() as db:
+                rows = db.execute('''SELECT run_id,segment,time_ms,bpm FROM events
+                    WHERE day>=? AND day<=? AND time_ms>=? AND time_ms<? AND valid=1
+                    ORDER BY time_ms,run_id,offset''', (start, end, start_ms, end_ms))
+                for index, row in enumerate(rows):
+                    at, bpm = row['time_ms'], row['bpm']
+                    minute = int(at//60000)*60000
+                    # Each minute keeps its latest actual sample and the range of all valid samples.
+                    summary = minutes.setdefault(minute, [minute, at, bpm, bpm, bpm, 0])
+                    summary[1:3] = at, bpm
+                    summary[3] = min(summary[3], bpm)
+                    summary[4] = max(summary[4], bpm)
+                    summary[5] += 1
+                    point = (index, at, bpm, f'{row["run_id"]}:{row["segment"]}')
+                    group = (at-start_ms)//width
+                    if group != bucket:
+                        emit()
+                        bucket, first, low, high = group, point, point, point
+                    elif bpm < low[2]:
+                        low = point
+                    elif bpm > high[2]:
+                        high = point
+                    last = point
+                emit()
+        return points, list(minutes.values())
 
     def csv_chunks(self, params):
         start, end, _, _, run = period(params)

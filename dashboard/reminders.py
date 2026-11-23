@@ -72,7 +72,8 @@ class Reminders:
             expiry=now+params['ttlMs'] if 'ttlMs' in params else params['expiresAtMs']
             candidate=copy.deepcopy(self.rows)
             if len(candidate)>=128:
-                old=next((key for key,row in candidate.items() if row['pcExpiresAtMs']<=now),None)
+                old=next((key for key,row in candidate.items()
+                          if row['pcExpiresAtMs']<=now and row['attemptStatus']!='sending'),None)
                 if old is None:raise ValueError('提醒记录已满，请等待现有提醒到期')
                 candidate.pop(old)
             candidate[identity]=dict(reminderId=identity,payloadHash=signature,params=params,createdAtMs=now,pcExpiresAtMs=expiry,attemptStatus='sending')
@@ -82,7 +83,9 @@ class Reminders:
             reply=(violation(params,self.policy()) if self.policy else None) or self.request('remind',params)
         except (OSError,ValueError):reply=dict(status='outcome_unknown_disconnected')
         with self.lock:
-            candidate=copy.deepcopy(self.rows);row=candidate[identity]
+            candidate=copy.deepcopy(self.rows);row=candidate.get(identity)
+            if not row or row['payloadHash']!=signature or row['attemptStatus']!='sending':
+                raise OSError('提醒发送记录在等待回执时发生变化')
             row['attemptStatus']=reply.get('status','invalid_result')
             if reply.get('reason'):row['policyReason']=reply['reason']
             if reply.get('limits'):row['limits']=reply['limits']

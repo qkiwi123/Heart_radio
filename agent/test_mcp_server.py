@@ -20,7 +20,7 @@ class MCPTests(unittest.TestCase):
         self.assertIn('error', server.dispatch(dict(jsonrpc='2.0', id=1, method='tools/list')))
         server = self.ready_server()
         value = server.dispatch(dict(jsonrpc='2.0', id=2, method='tools/list'))
-        self.assertEqual(len(value['result']['tools']), 11)
+        self.assertEqual(len(value['result']['tools']), 13)
         self.assertIn('cancel_measurement', [tool['name'] for tool in value['result']['tools']])
 
     def test_structured_result_matches_text_and_request_id(self):
@@ -72,7 +72,7 @@ class MCPTests(unittest.TestCase):
     def test_catalog_has_no_permission_enabler_and_explains_effects(self):
         server=self.ready_server();tools=server.dispatch(dict(jsonrpc='2.0',id=2,method='tools/list'))['result']['tools']
         names={t['name'] for t in tools}
-        self.assertEqual(names,{'read_watch_data','get_capabilities','get_heart_rate','get_device_status','measure_pressure','measure_motion','cancel_measurement','send_reminder','get_reminder_status','measure_heart_rate','get_user_state'})
+        self.assertEqual(names,{'read_watch_data','get_capabilities','get_heart_rate','get_device_status','measure_pressure','measure_motion','cancel_measurement','send_reminder','get_reminder_status','measure_heart_rate','get_user_state','get_watch_health_history','read_watch_health_now'})
         send=next(t for t in tools if t['name']=='send_reminder')
         self.assertFalse(send['annotations']['readOnlyHint']);self.assertIn('reminder_id',send['inputSchema']['required'])
 
@@ -94,6 +94,22 @@ class MCPTests(unittest.TestCase):
             response=server.dispatch(dict(jsonrpc='2.0',id='receipt',method='tools/call',params=dict(name='get_reminder_status',arguments=dict(reminder_id='one'))))
             self.assertFalse(response['result']['isError']);self.assertEqual(response['id'],'receipt')
             self.assertEqual('structuredContent' in response['result'],version=='2025-06-18')
+
+    def test_implicit_wear_only_is_forwarded_explicitly_for_older_dashboards(self):
+        with patch('mcp_server.LOCAL_HTTP.open') as wire:
+            wire.return_value.__enter__.return_value.read.return_value = b'{"ok":true}'
+            Server().invoke('get_user_state', {})
+        request = wire.call_args.args[0]
+        self.assertEqual(json.loads(request.data),
+                         {'name':'get_user_state', 'arguments':{'metrics':[]}})
+
+    def test_explicit_stress_has_time_for_preflight_and_pressure_deadline(self):
+        with patch('mcp_server.LOCAL_HTTP.open') as wire:
+            wire.return_value.__enter__.return_value.read.return_value = b'{"ok":true}'
+            Server().invoke('get_user_state', {'metrics':['stress']})
+            self.assertEqual(wire.call_args.kwargs['timeout'], 105)
+            Server().invoke('get_user_state', {'metrics':['heart_rate']})
+            self.assertEqual(wire.call_args.kwargs['timeout'], 65)
 
     def test_independent_calls_finish_out_of_order_with_their_original_ids(self):
         server=self.ready_server();fast=threading.Event()
@@ -128,6 +144,20 @@ class MCPTests(unittest.TestCase):
             for metrics in ([],['pressure','pressure'],['location'],[True]):
                 response=server.dispatch(dict(jsonrpc='2.0',id=5,method='tools/call',params=dict(name='read_watch_data',arguments=dict(metrics=metrics))))
                 self.assertEqual(response['error']['code'],-32602)
+            wire.assert_not_called()
+
+    def test_missing_metrics_and_conflicting_heart_wait_parameters_report_details_before_http(self):
+        server = self.ready_server()
+        with patch('mcp_server.LOCAL_HTTP.open') as wire:
+            for name, args, detail in (
+                ('read_watch_data', {}, 'Missing required arguments: metrics'),
+                ('read_watch_data', dict(metrics=['heart_rate'], heart_wait_seconds=15, heart_seconds=5),
+                 'Use only one of: heart_wait_seconds, heart_seconds'),
+                ('measure_heart_rate', dict(wait_seconds=15, seconds=5), 'Use only one of: wait_seconds, seconds'),
+            ):
+                response = server.dispatch(dict(jsonrpc='2.0', id=5, method='tools/call',
+                                                params=dict(name=name, arguments=args)))
+                self.assertEqual(response['error'], dict(code=-32602, message=detail))
             wire.assert_not_called()
 
 

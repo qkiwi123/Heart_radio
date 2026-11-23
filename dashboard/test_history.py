@@ -62,6 +62,10 @@ class HistoryTest(unittest.TestCase):
     def test_incremental_partial_lines_restart_and_replacement(self):
         run='20260926-120000-001';path=self.write(run,[event('2026-09-26T12:00:00')])
         self.assertEqual(self.query(year=2026)['statistics']['validCount'],1)
+        with self.store.connection() as db:
+            stat = path.stat()
+            self.assertEqual(db.execute('SELECT identity FROM sources').fetchone()[0],
+                             f'{stat.st_dev}:{stat.st_ino}')
         value=(json.dumps(event('2026-09-26T12:00:01',90))+'\n').encode()
         with path.open('ab') as stream: stream.write(value[:40])
         self.assertEqual(self.query(year=2026)['statistics']['validCount'],1)

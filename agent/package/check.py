@@ -5,6 +5,18 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import urllib.request
+
+
+def dashboard_version(port):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f'http://127.0.0.1:{port}/api/version', timeout=3) as response:
+            data = response.read(8193)
+        value = json.loads(data) if len(data) <= 8192 else None
+    except (OSError, ValueError):
+        return None
+    return value.get('version') if isinstance(value, dict) and isinstance(value.get('version'), str) else None
 
 
 def check(root):
@@ -29,10 +41,14 @@ def check(root):
     if responses[1]['result']['tools'] != expected:
         raise ValueError('Unexpected tool definitions')
     service = responses[2]['result']['structuredContent']
+    required = manifest.get('requiredPcVersion')
+    actual = dashboard_version(runtime['port']) if required else None
+    compatible = actual == required if actual is not None else None
     return dict(packageValid=True, packageVersion=manifest['packageVersion'], sourceCommit=manifest['sourceCommit'],
         sourceDirty=manifest['sourceDirty'], protocolVersion=responses[0]['result']['protocolVersion'],
         tools=[t['name'] for t in expected], localService=service.get('status'),
         localServiceAvailable=service.get('ok') is True,
+        requiredPcVersion=required, localServiceVersion=actual, localServiceCompatible=compatible,
         note='Protocol validity does not imply a worn watch or enabled standby. No measurement requested.')
 
 

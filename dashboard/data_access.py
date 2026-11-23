@@ -14,6 +14,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from data_policy import DataPolicy
+from user_state import STATE_METRICS, classify, heart_summary, motion_bins, selected_state_metrics
 
 TOOLS = json.loads((Path(__file__).resolve().parents[1] / 'agent' / 'tools.json').read_text(encoding='utf-8'))
 
@@ -31,11 +32,12 @@ def bridge_state():
 
 
 class DataAccess:
-    def __init__(self, root, heart_snapshot, bridge=bridge_request, connection=bridge_state, reminder_policy=None):
+    def __init__(self, root, heart_snapshot, bridge=bridge_request, connection=bridge_state, reminder_policy=None, wear_permitted=None):
         self.directory = Path(root) / 'runs' / 'data-access'
         self.heart_snapshot = heart_snapshot
         self.bridge = bridge
         self.connection = connection
+        self.wear_permitted = wear_permitted
         from reminder_policy import DEFAULTS
         self.reminder_policy=reminder_policy or (lambda:dict(limits=dict(DEFAULTS),peerConfirmed=False))
         self.policy = DataPolicy(root)
@@ -104,10 +106,24 @@ class DataAccess:
             if value and value.get('ok') is True and 0 <= age <= maximum_age:
                 return dict(value, cached=True, cacheAgeSeconds=age)
 
-    def capabilities(self):
+    def on_demand_state(self):
+        state = self.connection()
+        selected = {'rfcomm': 'bluetooth', 'wifi': 'wifi'}.get(state.get('transport'))
+        if not selected or not state.get('connected'):
+            reason = 'bridge_unavailable' if state.get('status') == 'bridge_unavailable' else 'watch_offline'
+            return dict(transport=None, ready=False, reason=reason)
+        if state.get('agentEnabled') is False or state.get('connectionOnly') is True:
+            return dict(transport=selected, ready=False, reason='interaction_disabled')
+        if state.get('agentEnabled') is not True:
+            return dict(transport=selected, ready=False, reason='interaction_unconfirmed')
+        if state.get('automaticRouting') and not state.get('agentInteraction', {}).get('peerConfirmed'):
+            return dict(transport=selected, ready=False, reason='interaction_sync_pending')
+        return dict(transport=selected, ready=True, reason=None)
+
+    def capabilities(self, compact=False):
         settings = self.policy.read()
         reminder_policy=self.reminder_policy()
-        return dict(schemaVersion=1, ok=True, status='ok',
+        result = dict(schemaVersion=1, ok=True, status='ok', onDemand=self.on_demand_state(),
             verifiedDevice=dict(model='OW20W2', sdk=27, firmware='OW20W2_11_A.92'),
             available=['heart_rate', 'device_status', 'pressure', 'accelerometer', 'gyroscope'],
             reminders=dict(available=True, templates=['strong','standard','light','silent','notification_only'],
@@ -117,14 +133,19 @@ class DataAccess:
                            deliveryIsNotHumanAcknowledgement=True),
             onDemandHeartRate=dict(tool='measure_heart_rate',defaultWaitSeconds=15,maxWaitSeconds=15,
                                   startsContinuousBroadcast=False,sharedPhysicalListener=True),
+            experimentalStress=dict(tool='get_user_state', metric='stress', source='stock_pressure_page', wakesScreen=True,
+                                    requiresAccessibility=True, requiresStillWrist=False, steadyWristRecommended=True, historyAvailable=True,
+                                    nativeHistoryAvailable=False, historySource='pc_archive',
+                                    validatesRest=False, automaticallyRetried=False),
             concurrentReading=dict(maxMeasurements=4,independentMetrics=True,sameMetricInFlightShared=True,
                                    cooldownScope='same_metric',batchTool='read_watch_data',batchDefaultHeartWaitSeconds=5),
-            userState=dict(tool='get_user_state',observationSeconds=30,requiredMetrics=['accelerometer','gyroscope'],
-                source='local_heuristic',accuracy='unmeasured',wearBasis='service_available_assumption',
+            userState=dict(tool='get_user_state',observationSeconds=30,requiredMetrics=['wear'],
+                selectableMetrics=list(STATE_METRICS), activityTierRequires=['accelerometer','gyroscope'],
+                 source='local_heuristic',accuracy='unmeasured',wearSource='watch_native',
+                 requiresConfirmedWearForNewSampling=True,
                 historyQuery=False,startsContinuousHeartBroadcast=False,requiresWatchMotionWindowVersion=1),
             unavailable=dict(location='No fresh GPS fix in the real test; not exposed as a default tool',
                              steps='No standard step callbacks during walking tests',
-                             wear_state='No validated wear-state interpretation',
                              light='Cover/uncover did not change the standard lux value',
                              spo2='Vendor raw callbacks have no validated conversion',
                              ecg='Vendor raw callbacks have no validated conversion'),
@@ -138,6 +159,18 @@ class DataAccess:
                           systemStickyRestart='new connection owner requires app reopening after process death; no reboot or force-stop recovery promise',
                           forceStopRecovery=False, rebootAutostart=False, changedComputerAddressDiscovery=True),
             sourceAgeVerified=False, longTermStabilityVerified=False, batteryCostMeasured=False)
+        if compact:
+            for field in ('unavailable', 'lifecycle', 'recovery', 'longTermStabilityVerified', 'batteryCostMeasured'):
+                result.pop(field)
+            result['reminders']['userPolicy'] = {key: reminder_policy[key]
+                for key in ('limits', 'peerConfirmed', 'syncStatus', 'storageError') if key in reminder_policy}
+            measurement = result['measurement']
+            if measurement is not None:
+                result['measurement'] = {'count': measurement['count'], 'requests': [
+                    {key: row[key] for key in ('requestId', 'metric', 'seconds', 'phase', 'cancelRequested') if key in row}
+                    for row in measurement['requests']
+                ]}
+        return result
 
     def heart_rate(self, maximum_age):
         state = self.heart_snapshot()
@@ -210,6 +243,58 @@ class DataAccess:
             temp = raw.get('batteryTemperatureTenthsC')
             value['data']['batteryTemperatureC'] = temp / 10 if isinstance(temp, (int, float)) and temp >= 0 else None
         return self.save('device_status', value)
+
+    def measure_stress(self, wearer_state):
+        result = dict(schemaVersion=1, metric='stress', experimental=True, ok=False,
+                      reportedWearerState=wearer_state, restVerified=False, accuracyVerified=False)
+        if wearer_state == 'moving':
+            return dict(result, status='skipped_moving')
+        if self.wear_permitted is None or not self.wear_permitted():
+            return dict(result, status='disabled_by_settings')
+        identity = uuid.uuid4().hex
+        entry = dict(requestId=identity, metric='stress', phase='measuring',
+                     startedAtMs=time.time_ns()//1_000_000, cancelRequested=False,
+                     cancel_event=threading.Event(), done=threading.Event())
+        with self.active_lock:
+            if 'stress' in self.active:
+                return dict(result, status='busy')
+            self.active['stress'] = entry
+        result['requestId'] = identity
+        try:
+            raw = self.bridge('health_stress', {}, request_id=identity)
+            if entry['cancel_event'].is_set():
+                return dict(result, status='cancelled')
+            if not self.wear_permitted():
+                return dict(result, status='disabled_by_settings')
+            status = raw.get('status', 'invalid_result')
+            if raw.get('id') == identity and raw.get('op') == 'health_stress':
+                if raw.get('pageStage') in ('measuring_seen', 'stock_page_seen', 'stock_page_unobserved'):
+                    result['pageStage'] = raw['pageStage']
+                if type(raw.get('enterAttempted')) is bool:
+                    result['enterAttempted'] = raw['enterAttempted']
+                if type(raw.get('recentMeasureAttempted')) is bool:
+                    result['recentMeasureAttempted'] = raw['recentMeasureAttempted']
+            if status != 'ok':
+                if status == 'stock_no_valid_reading':
+                    if result.get('pageStage') != 'measuring_seen':
+                        return dict(result, status='invalid_result')
+                    return dict(result, status=status, message='原厂提示“未测得有效值”，本次测量失败。')
+                if status == 'no_fresh_result':
+                    return dict(result, status=status, message='本次测量失败，等待 65 秒仍未取得新分数。')
+                return dict(result, status='watch_update_required' if status == 'unknown_operation' else status)
+            start, end, score = raw.get('measuringSeenAtMs'), raw.get('observedAtMs'), raw.get('score')
+            received = time.time_ns()//1_000_000
+            if (raw.get('id') != identity or raw.get('op') != 'health_stress' or raw.get('source') != 'stock_pressure_page'
+                    or raw.get('pageStage') != 'measuring_seen'
+                    or type(score) is not int or not 1 <= score <= 100 or type(start) is not int or type(end) is not int
+                    or not 0 <= end-start <= 65_000 or not entry['startedAtMs']-120_000 <= start <= end <= received+120_000):
+                return dict(result, status='invalid_result')
+            return dict(result, ok=True, status='ok', score=score, source=raw['source'],
+                        measuringSeenAtMs=start, observedAtMs=end, receivedAtMs=received)
+        finally:
+            with self.active_lock:
+                self.active.pop('stress', None)
+                entry['done'].set()
 
     def measure(self, metric, seconds, settings, fresh=False, state_window=False):
         if state_window and (metric not in ('accelerometer','gyroscope') or seconds!=30):raise ValueError('Invalid state window')
@@ -313,7 +398,8 @@ class DataAccess:
                 entry['done'].set()
 
     def read_watch_data(self, arguments, settings):
-        metrics=arguments.get('metrics',['device_status','heart_rate','pressure','accelerometer','gyroscope'])
+        metrics = arguments['metrics']
+        heart_wait = arguments.get('heart_wait_seconds', arguments.get('heart_seconds', 5))
         begin=time.monotonic();started=time.time_ns()//1_000_000
         def read(metric):
             try:
@@ -323,51 +409,124 @@ class DataAccess:
                 if metric=='heart_rate' and not arguments.get('fresh',False):
                     cached=self.heart_rate(settings['heartMaxAgeSeconds'])
                     if cached['ok']:return cached
-                return self.measure(metric,arguments.get('heart_seconds',5) if metric=='heart_rate' else arguments.get('seconds',settings['measurementSeconds']),settings,arguments.get('fresh',False))
+                return self.measure(metric,heart_wait if metric=='heart_rate' else arguments.get('seconds',settings['measurementSeconds']),settings,arguments.get('fresh',False))
             except (OSError,ValueError) as error:
                 return dict(schemaVersion=1,metric=metric,ok=False,status='read_error',error=type(error).__name__)
         with ThreadPoolExecutor(max_workers=5) as workers:
             values=dict(zip(metrics,workers.map(read,metrics)))
+        if arguments.get('compact', False):
+            values = {metric: self.compact_reading(metric, value) for metric, value in values.items()}
+        elif values.get('device_status', {}).get('data') is not None:
+            values['device_status'] = self.label_device_status(values['device_status'])
         succeeded=[metric for metric,value in values.items() if value.get('ok') is True]
         return dict(schemaVersion=1,metric='watch_snapshot',ok=bool(succeeded),complete=len(succeeded)==len(metrics),
                     status='ok' if len(succeeded)==len(metrics) else 'partial' if succeeded else 'no_data',
                     requestedMetrics=metrics,results=values,failedMetrics=[metric for metric in metrics if metric not in succeeded],
                     requestedAtMs=started,completedAtMs=time.time_ns()//1_000_000,elapsedMs=round((time.monotonic()-begin)*1000),
-                    sourceAgeVerified=False,interpretation='raw readings only; no validated scene classification')
+                    onDemand=self.on_demand_state(), sourceAgeVerified=False,
+                    interpretation='device readings only; no validated scene classification')
 
-    def user_state(self,settings):
-        from user_state import classify
-        required={'accelerometer','gyroscope'}
-        if not required<=set(settings['allowedMetrics']):
-            return dict(ok=False,status='disabled_by_settings',tier=None,label='暂不判断',reason='motion_metrics_required')
+    @staticmethod
+    def label_device_status(value):
+        if value.get('data') is None:
+            return value
+        return dict(value, data=dict(value['data'], bridgeLifecycleScope='wifi'))
+
+    @staticmethod
+    def compact_reading(metric, value):
+        result = dict(value)
+        samples = result.pop('samples', None)
+        if metric in ('accelerometer', 'gyroscope') and result['ok'] and samples:
+            axes = list(zip(*(sample['values'] for sample in samples)))
+            result['axisSummary'] = dict(min=[min(axis) for axis in axes], max=[max(axis) for axis in axes])
+            result['valueMeaning'] = 'min_max_of_retained_watch_xyz_samples'
+        if metric == 'device_status' and result.get('data') is not None:
+            data = result['data']
+            result['data'] = {key: data[key] for key in (
+                'batteryPct', 'chargingStatus', 'plugged', 'batteryTemperatureC', 'screenInteractive',
+                'wifiAvailable', 'heartRateCaptureRunning', 'activeRequests', 'requestWakeLockHeld',
+            ) if key in data}
+        return result
+
+    def user_state(self, settings, metrics, *, wear_confirmed):
+        metrics = tuple(metric for metric in metrics if metric != 'sleep')
         if not self.state_lock.acquire(blocking=False):
             return dict(ok=False,status='busy',tier=None,label='暂不判断')
-        begin=time.time_ns()//1_000_000;heart=[]
+        begin = time.time_ns()//1_000_000
+        heart = []
+        allowed = set(settings['allowedMetrics'])
+
         def observe(metric):
-            try:return self.measure(metric,30,settings,True,state_window=True)
-            except (OSError,ValueError):return dict(ok=False,status='read_error')
+            if metric not in allowed:
+                return dict(ok=False, status='disabled_by_settings')
+            try:
+                if metric == 'heart_rate':
+                    cached = self.heart_rate(settings['heartMaxAgeSeconds'])
+                    if cached['ok'] or not wear_confirmed:
+                        return cached
+                    return self.measure(metric, 15, settings, True)
+                if not wear_confirmed:
+                    return dict(ok=False, status='wear_unconfirmed')
+                return self.measure(metric, 30, settings, True, state_window=True)
+            except (OSError, ValueError):
+                return dict(ok=False, status='read_error')
+
         try:
-            with ThreadPoolExecutor(max_workers=2) as workers:
-                futures=[workers.submit(observe,metric) for metric in ('accelerometer','gyroscope')]
-                while True:
-                    if 'heart_rate' in settings['allowedMetrics']:
+            with ThreadPoolExecutor(max_workers=3) as workers:
+                futures = {metric: workers.submit(observe, metric) for metric in metrics}
+                while any(not future.done() for future in futures.values()):
+                    if 'heart_rate' in futures and 'heart_rate' in allowed:
                         heart.append(self.heart_rate(settings['heartMaxAgeSeconds']))
-                    if all(f.done() for f in futures):break
                     time.sleep(.5)
-                accel,gyro=[f.result() for f in futures]
-            end=time.time_ns()//1_000_000
-            # Read no new historical records; heart observations are bounded to this request.
-            return classify(accel,gyro,heart,begin,end)
+                raw = {metric: future.result() for metric, future in futures.items()}
+            end = time.time_ns()//1_000_000
+            allowed = set(self.policy.read()['allowedMetrics'])
+            for metric in raw.keys() - allowed:
+                raw[metric] = dict(ok=False, status='disabled_by_settings')
+            heart_selected = 'heart_rate' in raw and 'heart_rate' in allowed
+            heart = heart + [raw['heart_rate']] if heart_selected else None
+            if wear_confirmed and {'accelerometer', 'gyroscope'} <= raw.keys():
+                result = classify(raw['accelerometer'], raw['gyroscope'], heart, begin, end)
+            else:
+                result = dict(ok=True, status='observed', tier=None, label='暂不判断', completedAtMs=end)
+            results = {}
+            for metric, reading in raw.items():
+                value = dict(ok=reading['ok'], status=reading['status'])
+                if metric == 'heart_rate' and value['ok']:
+                    value.update({key: reading.get(key) for key in
+                                  ('value', 'unit', 'source', 'receivedAtMs', 'sourceAgeVerified')})
+                elif value['ok']:
+                    try:
+                        bins = motion_bins(reading, 1 if metric == 'accelerometer' else 4)
+                        value.update(rms=round(reading['rms'], 3), validSeconds=len(bins), observationSeconds=30)
+                    except (ValueError, TypeError, KeyError) as error:
+                        value.update(ok=False, status=str(error)[:80])
+                results[metric] = value
+            if heart_selected and 'heartRate' not in result:
+                result['heartRate'] = heart_summary(heart, begin, end)
+            result['results'] = results
+            if results and any(not item['ok'] for item in results.values()):
+                has_data = any(item['ok'] for item in results.values())
+                result.update(ok=has_data, status='partial' if has_data else 'insufficient_data')
+            return result
         finally:self.state_lock.release()
 
-    def call(self, name, arguments):
+    def call(self, name, arguments, *, wear_confirmed=False):
         if name in ('send_reminder', 'get_reminder_status'): raise ValueError('Use the shared reminder tool entry')
+        if name == 'get_user_state':
+            return self.user_state(self.policy.read(), selected_state_metrics(arguments), wear_confirmed=wear_confirmed)
         if not isinstance(arguments, dict): raise ValueError('Tool arguments must be an object')
         tool = next((tool for tool in TOOLS if tool['name'] == name), None)
         if tool is None: raise ValueError('Unknown tool')
-        if set(arguments) - set(tool['inputSchema']['properties']): raise ValueError('Unknown argument')
+        schema = tool['inputSchema']
+        if set(arguments) - set(schema['properties']): raise ValueError('Unknown argument')
+        if missing := set(schema.get('required', [])) - arguments.keys():
+            raise ValueError('Missing required arguments: ' + ', '.join(sorted(missing)))
+        exclusive = schema.get('not', {}).get('required')
+        if exclusive and all(key in arguments for key in exclusive):
+            raise ValueError('Use only one of: ' + ', '.join(exclusive))
         for key, item in arguments.items():
-            spec = tool['inputSchema']['properties'][key]
+            spec = schema['properties'][key]
             if spec['type'] == 'integer' and (type(item) is not int or not spec['minimum'] <= item <= spec['maximum']):
                 raise ValueError(f'{key} outside allowed integer range')
             if spec['type'] == 'boolean' and type(item) is not bool: raise ValueError(f'Invalid {key}')
@@ -377,16 +536,18 @@ class DataAccess:
             if spec['type'] == 'string' and (type(item) is not str or 'pattern' in spec and not re.fullmatch(spec['pattern'], item)):
                 raise ValueError(f'Invalid {key}')
             if 'enum' in spec and item not in spec['enum']: raise ValueError(f'Invalid {key}')
-        if name == 'get_capabilities': return self.capabilities()
+        if name == 'get_capabilities': return self.capabilities(arguments.get('compact', False))
         if name == 'cancel_measurement': return self.cancel(arguments.get('request_id'))
         settings = self.policy.read()
-        if name=='get_user_state':return self.user_state(settings)
         if name == 'read_watch_data':return self.read_watch_data(arguments,settings)
         metric = 'heart_rate' if name in ('get_heart_rate','measure_heart_rate') else 'device_status' if name == 'get_device_status' else 'pressure' if name == 'measure_pressure' else arguments.get('kind', 'accelerometer')
         if metric not in settings['allowedMetrics']:
             return dict(schemaVersion=1, metric=metric, ok=False, status='disabled_by_settings')
         if name == 'get_heart_rate': return self.heart_rate(min(arguments.get('max_age_seconds', settings['heartMaxAgeSeconds']), settings['heartMaxAgeSeconds']))
-        if name == 'measure_heart_rate': return self.measure('heart_rate',arguments.get('seconds',15),settings,True)
-        if name == 'get_device_status': return self.device_status(settings, arguments.get('fresh', False))
+        if name == 'measure_heart_rate':
+            return self.measure('heart_rate', arguments.get('wait_seconds', arguments.get('seconds', 15)), settings, True)
+        if name == 'get_device_status':
+            result = self.label_device_status(self.device_status(settings, arguments.get('fresh', False)))
+            return dict(result, onDemand=self.on_demand_state())
         metric = 'pressure' if name == 'measure_pressure' else arguments.get('kind', 'accelerometer')
         return self.measure(metric, arguments.get('seconds', settings['measurementSeconds']), settings, arguments.get('fresh', False))

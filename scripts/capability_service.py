@@ -107,7 +107,15 @@ class CapabilityService:
         try:
             process = self.windows.process(info['pid'])
         except OSError as error:
-            if error.errno == 5:
+            if error.errno == 5 or getattr(error, 'winerror', None) == 5:
+                # A stopped Windows process can retain a PID/handle after it
+                # disappears from the process list. Never act on the saved PID.
+                if (self.directory(info) / 'stop.request').is_file():
+                    try:
+                        if info['pid'] not in self.windows.processes():
+                            return False
+                    except OSError:
+                        pass
                 raise ServiceError('无法核对按需进程身份；请使用同一用户检查服务。') from error
             return False
         return (process['creationTicks'] == int(info['creationTicks']) and

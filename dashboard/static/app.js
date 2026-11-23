@@ -4,6 +4,11 @@ const clock=ms=>new Date(ms).toLocaleTimeString('zh-CN',{hour12:false});
 const age=v=>v==null?'—':v<1?'刚刚':`${Math.floor(v)} 秒前`;
 const duration=s=>{s=Math.max(0,Math.floor(s));return `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`};
 function text(id,value){$(id).textContent=value}
+function agentDurationText(enabled, remainingSeconds) {
+ if(typeof enabled!=='boolean')return '本次交互：尚未载入';
+ if(!enabled)return '本次交互：已关闭';
+ return remainingSeconds==null?'本次交互：不限时':`本次交互：剩余 ${Math.max(0,Math.ceil(remainingSeconds))} 秒`;
+}
 function svg(name,attrs={},content=''){const e=document.createElementNS('http://www.w3.org/2000/svg',name);for(const[k,v]of Object.entries(attrs))e.setAttribute(k,v);e.textContent=content;return e}
 function chart(state){
  const root=$('chart');root.replaceChildren();const now=state.endedMs??state.nowMs;

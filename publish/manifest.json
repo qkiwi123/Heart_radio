@@ -39,6 +39,10 @@
     "app/src/main/java/com/example/heart_radio/CaptureService.kt",
     "app/src/main/java/com/example/heart_radio/ConnectionService.kt",
     "app/src/main/java/com/example/heart_radio/DeviceGateway.kt",
+    "app/src/main/java/com/example/heart_radio/NativeHealth.kt",
+    "app/src/main/java/com/example/heart_radio/NativeSleepState.kt",
+    "app/src/main/java/com/example/heart_radio/SleepProbe.kt",
+    "app/src/main/java/com/example/heart_radio/StressPageService.kt",
     "app/src/main/java/com/example/heart_radio/DiagnosticRetention.kt",
     "app/src/main/java/com/example/heart_radio/HeartBroadcast.kt",
     "app/src/main/java/com/example/heart_radio/HeartCaptureDiagnostics.kt",
@@ -101,6 +105,7 @@
     "app/src/main/res/values/themes.xml",
     "app/src/main/res/xml/backup_rules.xml",
     "app/src/main/res/xml/data_extraction_rules.xml",
+    "app/src/main/res/xml/stress_page_service.xml",
     "app/src/test/java/com/example/heart_radio/BatchedDiagnosticWriterTest.kt",
     "app/src/test/java/com/example/heart_radio/BlePacketTest.kt",
     "app/src/test/java/com/example/heart_radio/BridgeLifecycleTest.kt",
@@ -134,7 +139,10 @@
     "dashboard/build_identity.py",
     "dashboard/current_export.py",
     "dashboard/data_access.py",
+    "dashboard/health_history.py",
+    "dashboard/health_sync.py",
     "dashboard/history.py",
+    "dashboard/host_connectivity.py",
     "dashboard/project_shutdown.py",
     "dashboard/reminder_sync.py",
     "dashboard/reminder_tools.py",
@@ -144,6 +152,8 @@
     "dashboard/static/app.js",
     "dashboard/static/connection.js",
     "dashboard/static/data.js",
+    "dashboard/static/health.js",
+    "dashboard/static/health-timeline.js",
     "dashboard/static/history.js",
     "dashboard/static/index.html",
     "dashboard/static/navigation.js",
@@ -154,6 +164,7 @@
     "dashboard/static/style.css",
     "dashboard/test_broadcast_sync.py",
     "dashboard/test_build_identity.py",
+    "dashboard/test_health_sync.py",
     "dashboard/test_capability_api.py",
     "dashboard/test_connection_api.py",
     "dashboard/test_current_export.py",
@@ -162,6 +173,7 @@
     "dashboard/test_data_settings.py",
     "dashboard/test_heart_once.py",
     "dashboard/test_history.py",
+    "dashboard/test_stress.py",
     "dashboard/test_offline_timeout.py",
     "dashboard/test_project_shutdown.py",
     "dashboard/test_reminder_api.py",
@@ -229,6 +241,7 @@
     "receiver/control.py",
     "receiver/diagnostic_log.py",
     "receiver/discovery.py",
+    "receiver/health_protocol.py",
     "receiver/inspect_adapter.py",
     "receiver/inspect_classic.py",
     "receiver/inspect_target.py",
@@ -341,7 +354,7 @@
     },
     "app/src/test/java/com/example/heart_radio/ReadingStateTest.kt": {
       "template": "publish/public/app/src/test/java/com/example/heart_radio/ReadingStateTest.kt",
-      "sourceSha256": "1cd2ad8b5c5896a40e9aa9b7e93e31382a5a0554ea3cd6145777fa12e398cc05"
+      "sourceSha256": "0fc14e982b602fb804c96dd60b6b0ec1e63b536bcb4abff9fcf7c3588ff4df7d"
     },
     "app/src/test/java/com/example/heart_radio/WifiConfigTest.kt": {
       "template": "publish/public/app/src/test/java/com/example/heart_radio/WifiConfigTest.kt",
@@ -373,19 +386,19 @@
     },
     "scripts/Get-Watch.ps1": {
       "template": "publish/public/scripts/Get-Watch.ps1",
-      "sourceSha256": "08c0f29f4b890fcb6257dc421b80a760883c1808c595866ca04605b63700fd1e"
+      "sourceSha256": "8a94f04ff1d89e8757f68c3a8a064d2d2ac6f053fac41694268f0415643e9e05"
     },
     "receiver/rfcomm_probe.py": {
       "template": "publish/public/receiver/rfcomm_probe.py",
-      "sourceSha256": "98bb3638eeb271c4579e64c50ae18436af5ce82c7e00a49c95aabfc9353118bb"
+      "sourceSha256": "e3565b6055dcfa68a1c867750118ea84d8d7fdfdab099a364f3a916a53fb0291"
     },
     "receiver/test_rfcomm_probe.py": {
       "template": "publish/public/receiver/test_rfcomm_probe.py",
-      "sourceSha256": "8ed1f2ebfb9061c0755e295af7076f9e837893b67ec1ff6151bb3a4d46ab821d"
+      "sourceSha256": "c1091e79306d4892ad0cff0b93343f7a547fb688da365e40d177a53768a9b00f"
     },
     "agent/export_package.py": {
       "template": "publish/public/agent/export_package.py",
-      "sourceSha256": "ed86bd01a12086a44390011ad4fe746ac9fda14d60fb9810544f8368c3a8c406"
+      "sourceSha256": "77cd7c22abd84cfde9dd499f5c958564a2b4075cd8d24814b3f503e5ea23288c"
     },
     "launchers/desktop/project-path.txt": {
       "template": "publish/public/launchers/desktop/project-path.txt"

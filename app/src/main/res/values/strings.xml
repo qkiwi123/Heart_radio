@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">HeartRadio</string>
+    <string name="stress_service_name">HeartRadio 压力点测（实验）</string>
+    <string name="stress_service_description">允许已连接的电脑唤醒手表并打开原厂压力页。必要时点击原厂测量按钮，读取当次状态和分数。请保持手腕静止。</string>
 </resources>

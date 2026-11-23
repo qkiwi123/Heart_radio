@@ -72,6 +72,22 @@ class ReminderTests(unittest.TestCase):
         self.assertTrue(entered.wait(1))
         try:self.assertTrue(self.service.send(self.value)['duplicate']);self.request.assert_called_once()
         finally:release.set();thread.join(2)
+
+    def test_expired_send_is_protected_until_its_reply_is_saved(self):
+        def receive(op, params):
+            if params['reminderId'] == 'in-flight':
+                self.service.rows['in-flight']['pcExpiresAtMs'] = 0
+                for n in range(127):
+                    self.service.send(dict(self.value, reminderId=f'other-{n}'))
+                with self.assertRaisesRegex(ValueError, '记录已满'):
+                    self.service.send(dict(self.value, reminderId='replacement'))
+            return dict(status='issued', reminderId=params['reminderId'])
+
+        self.request.side_effect = receive
+        self.assertEqual(self.service.send(dict(self.value, reminderId='in-flight'))['status'], 'issued')
+        self.assertEqual(self.service.status('in-flight')['receipt']['status'], 'issued')
+        self.service.send(dict(self.value, reminderId='replacement'))
+        self.assertNotIn('in-flight', self.service.rows)
     def test_oversized_or_corrupt_journal_is_preserved_and_fails_closed(self):
         p=self.service.path;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('{bad')
         service=Reminders(self.folder.name,self.request)

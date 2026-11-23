@@ -42,6 +42,11 @@ def checked_bytes(name):
     return path.read_bytes()
 
 
+def source_digest(content):
+    # Git may check text out with either LF or CRLF.
+    return hashlib.sha256(content.replace(b'\r\n', b'\n')).hexdigest()
+
+
 def scan(files):
     for name, content in files.items():
         safe_path(name)
@@ -99,7 +104,7 @@ def export(create_branch=False, author='HeartRadio <heartradio@users.noreply.git
         content = checked_bytes(rule['template'])
         if rule.get('sourceSha256'):
             original = checked_bytes(target)
-            if hashlib.sha256(original).hexdigest() != rule['sourceSha256'] and original != content:
+            if source_digest(original) != rule['sourceSha256'] and original != content:
                 raise ValueError(f'{target} changed: review/update the public override before publishing')
         files[target] = content
     # A fixture generated from arithmetic, without reading any personal recording.

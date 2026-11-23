@@ -1,6 +1,8 @@
 # 手表数据与提醒 MCP：由你的 Agent 自行接入
 
-这是 HeartRadio 0.7.0的独立 stdio MCP 接入包，共十一项工具，含一次30秒的三档用户状态粗略判断。电脑使用 `项目提供的桌面入口` 的01，手表打开应用，按保存策略选择已配对蓝牙或原Wi-Fi；连接、持续心率和Agent交互是三项独立控制。需要新设备读取、按需测量、状态判断或提醒时，用户在任意一端开启同一个Agent交互开关，等待“两端已同步”。持续心率另由用户开启。导出本目录不会修改Hermes或其他Agent的配置。
+这是 HeartRadio `0.13.0` 的独立 stdio MCP 接入包，共 13 项工具。电脑使用项目提供的 01 桌面入口，手表打开应用，按保存策略选择已配对蓝牙或局域网 Wi-Fi。需要新设备读取、按需测量、状态判断或提醒时，在任一端开启 Agent 交互并等待“两端已同步”。持续心率由独立开关控制。
+
+本包的新参数和返回字段配套电脑服务 `1.18.0-stress-history`。请先启动对应的电脑服务，再重载 MCP。检查脚本同时报告 `requiredPcVersion`、`localServiceVersion` 和 `localServiceCompatible`。其中 `false` 表示电脑服务版本与本包的配套版本不同，`null` 表示无法核对。
 
 你可以直接给 Hermes 这段要求：
 
@@ -8,7 +10,7 @@
 
 ## 给接入 Agent 的步骤
 
-1. 读取 `runtime.json` 与 `VERSION.json`，确认文件路径、Python及电脑服务端口。运行 `runtime.json` 中的 Python，参数为本目录 `scripts/check.py`。这一步只检查文件完整性、MCP握手、十一项工具和电脑能力清单，不请求新测量或发送提醒。`packageValid:true` 与 `localServiceAvailable:true` 是不同结论；电脑服务关闭时前者仍可通过。
+1. 读取 `runtime.json` 与 `VERSION.json`，确认文件路径、Python 和电脑服务端口。运行 `runtime.json` 中的 Python，参数为本目录 `scripts/check.py`。检查结果分别报告文件完整性、MCP 握手、13 项工具发现和电脑服务是否可用。
 2. 核对你自己的 MCP 配置格式。Hermes 使用 YAML `mcp_servers`，示例为 `clients/hermes.yaml.example`，等价 JSON 片段为 `clients/hermes.json`；使用 `mcpServers` 格式的客户端参考 `clients/generic.json.example`。不要把一种格式原样写入另一客户端。实际绝对命令和参数以这些生成文件为准。
 3. 确认正在使用的 profile、配置文件和运行环境，备份原文件，只合并 `heartradio` 项，保留其他 MCP、模型和用户设置。Hermes 原生 Windows 的默认路径可能是 `%LOCALAPPDATA%\hermes\config.yaml`，其他安装可能是 `~/.hermes/config.yaml`；以自己的实际环境为准，不根据示例猜测。
 4. 重启本 Agent 会话，或使用已支持的 `/reload-mcp`。Hermes 可用 `hermes mcp test heartradio` 验证连接。工具集名称为 `mcp-heartradio`，具体发现后的工具名称由客户端决定。
@@ -28,12 +30,14 @@
 
 也可以使用 Agent 原有的配置编辑能力或 Hermes 自己的 MCP 管理命令。不支持 MCP 的 Agent 可以经项目的本机 HTTP 工具入口接入，见项目 `docs/LOCAL-AGENT.md`。完整调用边界见项目 `docs/MCP-CONTRACT.md`。
 
-## 十一项工具与数据含义
+## 十三项工具与数据含义
 
 | 工具 | 行为 |
 | --- | --- |
-| `get_user_state` | 无参数；新采集完整30秒运动，由电脑返回“可能在休息”“清醒且可能不明显活动”“清醒且活动较明显”或“暂不判断”。只附运动比例和当次有效心率摘要，不返回原始数组，不查历史，不自动开启心率广播。通常需30～40秒。 |
-| `read_watch_data` | 一次读取任意组合，例如 `{"metrics":["pressure","accelerometer","gyroscope"],"seconds":4}`。各指标并行；逐项保留成功/失败、来源与时间。默认复用有效心率，否则等待新有效回调，`fresh:true`强制本次新读。返回 `complete` 与 `failedMetrics`，不能只看整体 `ok`。 |
+| `get_user_state` | 先查佩戴，确认离腕时直接结束判断。`metrics` 可任选睡眠、心率、加速度、陀螺仪和显式压力点测，省略或传空列表时只查佩戴。 |
+| `read_watch_health_now` | 单次读取原厂活动、佩戴或本轮最近的睡眠事件及时间。事件可能晚于实际变化，暂无有效事件时为未知。 |
+| `get_watch_health_history` | 查询授权的电脑健康归档（含成功压力点测）。历史睡眠使用 `nextSegmentOffset` 分页读取明细。 |
+| `read_watch_data` | 必须通过 `metrics` 显式选择非空指标组合，例如 `{"metrics":["pressure","accelerometer","gyroscope"],"seconds":4}`。各指标并行；逐项保留成功/失败、来源与时间。默认复用有效心率，否则等待新有效回调，`fresh:true`强制本次新读。返回 `complete` 与 `failedMetrics`，不能只看整体 `ok`。 |
 | `get_capabilities` | 查询已验证指标及限制，不请求手表新采集。 |
 | `get_heart_rate` | 读取有效广播或一次性心率缓存，`max_age_seconds` 为1～30秒；本次调用不请求设备。 |
 | `get_device_status` | 按需读取电量、充电和连接信息；`fresh:true` 绕过允许的状态缓存。 |
@@ -44,9 +48,11 @@
 | `send_reminder` | 立即发送自定义文字，可选振动/亮屏、模板与自定义波形；需要已同步开启的Agent交互。 |
 | `get_reminder_status` | 默认只读电脑保存的发送尝试和回执；`fresh:true`主动向手表核对，需要Agent交互，不重发提醒。 |
 
+`get_capabilities` 和 `read_watch_data` 可传 `compact:true` 获取日常摘要。气压保留均值，运动保留所存样本的三轴最小值与最大值，完整模式可查看原始样本。按需读取条件以电脑端 `onDemand` 为准。设备状态的 `bridgeLifecycleScope: wifi` 表示嵌套桥接状态仅属 Wi-Fi，蓝牙可用时仍可能看到 Wi-Fi 在重试。
+
 只读电脑的调用：`get_capabilities`、`get_heart_rate`、`get_reminder_status(fresh:false)`。设备状态及传感器可按既有设置复用缓存，新查询/新测量必须经过交互门禁；`measure_heart_rate`、`send_reminder`和`get_reminder_status(fresh:true)`需要访问手表。关闭交互仍能查看电脑已有提醒记录；工具没有开启交互、连接或持续心率的能力。
 
-`get_user_state`同样需要手表连接和Agent交互，且加速度、陀螺仪均已许可。服务可用按使用约定默认正常佩戴，`wearBasis:service_available_assumption`不是自动佩戴检测。`source:local_heuristic`、`accuracy:unmeasured`说明它是尚未测定准确率的本地规则；标签中的“清醒”也只是猜测，不确认睡眠、坐姿或行走。第一档还需要本次请求窗口内至少3个不同有效心率接收事件及稳定性依据；心率缺失时很低活动返回暂不判断，第二/三档可只依靠足够运动证据。返回`ok:true,tier:null`表示观测完成但证据不足，属于正常未知结果，不应自动重测。运动失败返回`ok:false`及原因；取消沿用`cancel_measurement`，以原查询返回为最终结果。该查询不写状态历史，也不替换原短测量缓存。
+`get_user_state({"metrics":["sleep"]})` 只读佩戴和本轮最近的原厂睡眠事件。确认在腕后才启动新心率或运动采样。两路运动各观测约 30 秒，两路均有效才支持活动分档。第一档还需要本次窗口内至少 3 条有效心率事件及稳定性依据。各项受独立权限限制，单项失败时仍可返回其他可用结果。睡眠报告与活动档位分别返回，活动分档准确率尚未测定。可通过 `cancel_measurement` 取消采集，以原查询的返回确认结果。 显式选 `stress` 才会亮屏进行原厂压力点测，已知活动传 `wearer_state:"moving"` 跳过。归档开启时保存成功的压力结果。
 
 ## 提醒参数、模板与回执
 
@@ -55,7 +61,7 @@
 
 每个新提醒需要唯一`reminder_id`（1～64个ASCII字母/数字/下划线/连字符，建议UUID十六进制）、`title`（1～60字符）、`body`（1～500字符）。中文/表情按完整Unicode字符计数，正文可换行，纯文本显示。手表正文和标题可以滚动，“知道了”固定在底部。
 
-`template`可选`strong`（默认）、`standard`、`light`、`silent`（静默亮屏）、`notification_only`（仅通知）。`vibrate`和`screen`可分别覆盖模板。`vibration`可覆盖`pulse_ms`20～1000、`gap_ms`0～2000、`count`1～8、`amplitude`1～255；技术硬上限为整组含间隔10000ms；用户限额默认6000ms。用户可在电脑或手表的提醒效果设置中调整至1000～10000ms，Agent必须遵守当前较低限额。默认强档为255/360ms/两次/间隔220ms。振幅受硬件支持和实际触感限制，回执同时返回请求参数、实际下发值与硬件能力。
+`template`可选`strong`（默认）、`standard`、`light`、`silent`（静默亮屏）、`notification_only`（仅通知）。`vibrate`和`screen`可分别覆盖模板。`vibration`可覆盖`pulse_ms`20～1000、`gap_ms`0～2000、`count`1～8、`amplitude`1～255；技术硬上限为整组含间隔10000ms；用户限额默认6000ms。用户可在电脑或手表的提醒效果设置中调整至1000～10000ms，Agent必须遵守当前较低限额。普通和紧急提醒均保留默认强档。按用户反馈，较弱振动通常察觉不到，强档两次短振对日常使用可接受。仅在用户明确要求减弱、静默或自定义时覆盖默认振动。强档振幅为 255，每次 360 毫秒，共两次，间隔 220 毫秒，整组约 0.94 秒。振幅受硬件支持和实际触感限制，回执同时返回请求参数、实际下发值与硬件能力。
 
 `screen_seconds`为5～30秒，默认15，并须符合用户页面上限（默认30秒，可设5～30秒）；`ttl_seconds`为1～300秒，默认60，是立即发送的有效期，不是未来定时发送。遵守系统勿扰和锁屏，不自动解锁。示例工具参数：
 
@@ -76,13 +82,15 @@
 
 `issued`仅表示下发API，`displayed`表示页面取得显示，`acknowledgedAtMs`表示本人点过“知道了”；三者不能互换，点击也不是阅读全部文字的证明。`suppressedByDnd`、`screenSuppressedByLock`记录系统限制。发送返回`ok:false`时报告实际失败或不确定状态；本地查询返回`ok:true`仅表示找到记录，其中可以是之前失败的尝试，不能当作发送成功。
 
+`attemptStatus` 是当次发送尝试的结果。`status` 是结合已有回执得出的当前已知状态。例如 `attemptStatus: "issued"` 和 `status: "acknowledged"` 可以同时出现，表示当时已下发，后来用户点了确认。查询成功仅表示查到记录。
+
 通过`get_capabilities`读取当前允许振动/亮屏、时长限额和同步状态。只有用户可在两端设置中编辑；设置离线保存、不自行连接，冲突时采用更严格值。新提醒在设置尚未确认同步或保存失败时拒绝；超限返回`reminder_policy_denied`及原因，不悄悄改波形。保存效果设置会结束当前提醒。页面到期退出并释放本应用常亮要求，整机实际熄屏仍受系统影响。声音已支持，服从前述许可与系统限制。
 
 完整参数见 `tools.json`。结果中的 `receiptAgeSeconds`、`cacheAgeSeconds` 是电脑接收/缓存年龄，`sourceAgeVerified:false` 表明源采样年龄没有独立标定。旧结果必须作为缓存说明，不能称为当前新测量。离线、无接触、过期返回空值或明确状态；不以0代替。气压与运动只在监听及短时唤醒已释放后提供有效新数值。
 
 常见状态：`local_service_unavailable` 表示仪表盘工具入口不可访问；`bridge_unavailable`/`watch_offline` 表示按需通道未就绪；`busy` 表示同一指标已有不兼容时长的采集或设备采集容量已满；`rate_limited` 应等待返回的重试时间；`disabled_by_settings` 表示指标被网页关闭。心率可因 `no_contact`、`stale` 等状态不可用，应报告实际返回的状态。
 
-多个 Agent 共用电脑数据层：心率、气压、加速度、陀螺仪最多四项同时采集；相同指标与时长的在途请求共用一次采集，时长不同则返回该指标忙。每项独立清理，定向取消不影响其他指标；共用同一编号的调用会一起收到取消结果。同一指标的间隔可设0～300秒，默认0，不再阻挡其他指标；`fresh:true`不绕过用户设置。stdio适配器支持最多八个业务调用并发，取消另有处理通道。Hermes是否并行还受其当前客户端限制，因此现有Hermes配置保持 `supports_parallel_tool_calls:false`，推荐使用 `read_watch_data` 在一次工具调用内完成任意组合。气压/运动最多10秒，一次性心率最多15秒；心率首个有效回调即结束。默认综合读取优先用允许的有效心率缓存，无数据则并行等待最多5秒的新有效回调；需要更长等待可显式传 `heart_seconds:15`。独立 `measure_heart_rate` 仍默认最多15秒。缺失必须照实返回。新生成客户端建议90秒调用预算；已有60秒配置通常可覆盖正常状态观测，但故障清理可能更久。预算包含通信与清理，取消需由原请求结果确认资源释放。
+多个 Agent 共用电脑数据层：心率、气压、加速度、陀螺仪最多四项同时采集；相同指标与时长的在途请求共用一次采集，时长不同则返回该指标忙。每项独立清理，定向取消不影响其他指标；共用同一编号的调用会一起收到取消结果。同一指标的间隔可设0～300秒，默认0，不再阻挡其他指标；`fresh:true`不绕过用户设置。stdio适配器支持最多八个业务调用并发，取消另有处理通道。Hermes是否并行还受其当前客户端限制，因此现有Hermes配置保持 `supports_parallel_tool_calls:false`，推荐使用 `read_watch_data` 在一次工具调用内完成任意组合。气压/运动最多10秒，一次性心率最多15秒；心率首个有效回调即结束。默认综合读取优先用允许的有效心率缓存，无数据则并行等待最多5秒的新有效回调；需要更长等待可显式传 `heart_wait_seconds:15`。独立 `measure_heart_rate` 用 `wait_seconds`，默认最多 15 秒。旧参数 `heart_seconds` 与 `seconds` 分别保留，不能与对应的新参数同传。缺失必须照实返回。新生成客户端建议120秒调用预算；显式压力测量的电脑端请求上限105秒（含佩戴检查及原厂压力页等待）。既有客户端配置请同步超时。预算包含通信与清理，取消需由原请求结果确认资源释放。
 
 当前默认工具不包含 GPS、计步、血氧、心电和厂商原始佩戴通道。定位已完成窗边诊断但未取得坐标，用户决定本轮跳过位置接入，保留为可选后续工作。不得从未验证原始通道推算健康或位置数据。
 

@@ -23,6 +23,7 @@ class CapabilityActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var status: TextView
     private lateinit var standbyToggle: Button
+    private lateinit var standbyDurationView: StandbyDurationView
     private var controlBusyUntil = 0L
     private val refresh = object : Runnable {
         override fun run() {
@@ -33,6 +34,7 @@ class CapabilityActivity : Activity() {
             if (standbyToggle.text.toString() != toggleText) standbyToggle.text = toggleText
             standbyToggle.isSelected = AgentInteraction.enabled()
             standbyToggle.isEnabled = SystemClock.uptimeMillis() >= controlBusyUntil
+            standbyDurationView.showCurrent(AgentInteraction.state())
             handler.postDelayed(this, 1000)
         }
     }
@@ -58,8 +60,9 @@ class CapabilityActivity : Activity() {
             AgentInteraction.set(this,if(AgentInteraction.needsRepair())false else !AgentInteraction.enabled())
         }
         ServiceToggleStyle.configure(standbyToggle)
-        layout.addView(label("待命时长设置"))
-        layout.addView(StandbyDurationView(this))
+        layout.addView(label("Agent 交互时长"))
+        standbyDurationView = StandbyDurationView(this)
+        layout.addView(standbyDurationView)
         setContentView(ScrollView(this).apply {
             // Redraw an opaque viewport, including newly exposed top/bottom strips.
             setBackgroundColor(canvasColor)

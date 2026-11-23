@@ -1,7 +1,7 @@
 [
   {
     "name": "read_watch_data",
-    "description": "Read any selected combination of device_status, heart_rate, pressure, accelerometer and gyroscope concurrently; omitted metrics means all five. This can start new bounded sensor measurements: by default reuse permitted recent caches, otherwise query status, wait up to heart_seconds (default 5, maximum 15) for one valid heart callback, and sample pressure/motion for seconds (saved default 4, maximum 10). fresh=true bypasses caches, never permissions, busy slots or per-metric cooldown. All new watch operations require a connected paired route and synchronized Agent interaction permission. Overall ok=true means at least one metric succeeded; inspect complete, failedMetrics and every result before claiming success. Results have separate sources and receipt times, not a simultaneous physiological snapshot; source sampling age is unverified. Does not enable continuous broadcast, infer activity or change settings. Cancel active IDs obtained from get_capabilities using cancel_measurement.",
+    "description": "当任务需要一次读取多项手表数据时使用，可组合查询设备状态、心率、气压、加速度和陀螺仪。必须通过 metrics 显式选择所需指标，缺少有效缓存时可能发起新的查询或采样。日常查询可用 compact:true 获取逐项摘要，分析原始样本时使用完整返回。\n\nRead any selected combination of device_status, heart_rate, pressure, accelerometer and gyroscope concurrently; metrics is required and must list the desired metrics. This can start new bounded sensor measurements: by default reuse permitted recent caches, otherwise query status, wait up to heart_wait_seconds (default 5, maximum 15) for one valid heart callback, and sample pressure/motion for seconds (saved default 4, maximum 10). fresh=true bypasses caches, never permissions, busy slots or per-metric cooldown. All new watch operations require a connected paired route and synchronized Agent interaction permission. Overall ok=true means at least one metric succeeded; inspect complete, failedMetrics and every result before claiming success. Results have separate sources and receipt times, not a simultaneous physiological snapshot; source sampling age is unverified. Does not enable continuous broadcast, infer activity or change settings. heart_seconds is a compatibility alias; pass only one of the two heart wait fields. seconds applies only to pressure and motion. compact=true omits raw sample arrays and returns axisSummary.min and axisSummary.max for successful motion reads, in X/Y/Z order over retained samples. onDemand is the current route and interaction snapshot; use each result to determine what succeeded. Cancel active IDs obtained from get_capabilities using cancel_measurement.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -32,13 +32,33 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 15,
-          "default": 5,
-          "description": "Maximum heart callback wait in this combined read; default 5 seconds for a quick snapshot. Explicitly use up to 15 when a longer heart wait is wanted."
+          "description": "旧版兼容参数，等同于 heart_wait_seconds。二者只能传一个。"
         },
         "fresh": {
           "type": "boolean",
           "default": false
+        },
+        "heart_wait_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 15,
+          "default": 5,
+          "description": "缺少有效心率缓存时，等待首个有效读数的上限，默认 5 秒。"
+        },
+        "compact": {
+          "type": "boolean",
+          "default": false,
+          "description": "返回逐项摘要，省略原始样本。运动项通过 axisSummary.min 和 axisSummary.max 返回保留样本的三轴范围，顺序为 X、Y、Z。"
         }
+      },
+      "required": [
+        "metrics"
+      ],
+      "not": {
+        "required": [
+          "heart_wait_seconds",
+          "heart_seconds"
+        ]
       }
     },
     "annotations": {
@@ -50,10 +70,16 @@
   },
   {
     "name": "get_capabilities",
-    "description": "Read the local verified capability inventory, saved metric/effect limits and current active measurement IDs. No watch query, wake or sensor start. Available means historically verified on OW20W2 / Android 27 / OW20W2_11_A.92, not a live readiness check or a promise that permission, connection, fresh data or every sensor is currently available. Does not change settings or enable services.",
+    "description": "当需要了解可以读取哪些指标、提醒效果有哪些限制，或查找正在测量的请求 ID 时使用。只读取电脑上的能力和设置信息。日常判断可用 compact:true，完整返回适合排查同步和连接。\n\nRead the local verified capability inventory, saved metric/effect limits and current active measurement IDs. No watch query, wake or sensor start. Available means historically verified on OW20W2 / Android 27 / OW20W2_11_A.92, not a guarantee that the watch or a metric is currently available. onDemand reports the selected transport and current interaction readiness, not the result of a device request. Does not change settings or enable services.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "compact": {
+          "type": "boolean",
+          "default": false,
+          "description": "保留指标权限、限制、在途请求、通道就绪和佩戴条件，省略同步寄存器和其他诊断。"
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -65,7 +91,7 @@
   },
   {
     "name": "get_heart_rate",
-    "description": "Read only allowed recent broadcast or one-shot heart results already saved on the PC; never queries the watch or starts measurement, including while Agent interaction is off. max_age_seconds can only tighten the saved heart receipt-age limit (1-30 seconds). Age is PC receipt age; source sampling age is unverified. May return stale/disconnected/no_valid_data with value=null; no number is guaranteed. For an explicitly wanted new callback use measure_heart_rate. Does not infer health, sleep or wear state.",
+    "description": "当需要查看近期已有的心率读数时使用。只读取电脑已收到的有效结果，无可用读数时返回空值。\n\nRead only allowed recent broadcast or one-shot heart results already saved on the PC; never queries the watch or starts measurement, including while Agent interaction is off. max_age_seconds can only tighten the saved heart receipt-age limit (1-30 seconds). Age is PC receipt age; source sampling age is unverified. May return stale/disconnected/no_valid_data with value=null; no number is guaranteed. For an explicitly wanted new callback use measure_heart_rate. Does not infer health, sleep or wear state.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -86,7 +112,7 @@
   },
   {
     "name": "get_device_status",
-    "description": "Read a permitted recent PC status cache, otherwise actively query watch battery, charging, screen, connection and capture metadata through the selected paired Bluetooth/Wi-Fi route. fresh=true always bypasses the cache. New queries require connected, synchronized Agent interaction permission; allowed saved cache reads can work with interaction off. Battery temperature is not body temperature. Cache receipt time is not proof of current device state. Does not start sensors or enable services.",
+    "description": "当需要查看手表电量、充电、屏幕或采集状态时使用。默认允许复用有效缓存，确需向手表重新查询时传 fresh:true。\n\nRead a permitted recent PC status cache, otherwise actively query watch battery, charging, screen, connection and capture metadata through the selected paired Bluetooth/Wi-Fi route. fresh=true always bypasses the cache. New queries require connected, synchronized Agent interaction permission; allowed saved cache reads can work with interaction off. Battery temperature is not body temperature. Cache receipt time is not proof of current device state. onDemand describes the current route and interaction, even with cached device data. data.bridgeLifecycle is Wi-Fi diagnostics; retry_wait does not block a ready Bluetooth route. Does not start sensors or enable services.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -106,7 +132,7 @@
   },
   {
     "name": "measure_pressure",
-    "description": "Read a permitted same-duration recent pressure result, otherwise explicitly sample atmospheric pressure in hPa for 1-10 seconds (saved default 4). fresh=true bypasses only the cache. New measurements require a connected paired route, synchronized Agent interaction permission, enabled pressure metric and its cooldown/slot. The representative value is the mean of at most 64 retained samples, not a calibrated whole-window average or blood pressure. Successful output confirms listener and bounded CPU-lock cleanup; failures may provide no value. Never automatically retry.",
+    "description": "当任务需要获取手表测得的环境气压时使用。默认允许复用同时长的有效结果，缺少符合条件的缓存时尝试新采样。\n\nRead a permitted same-duration recent pressure result, otherwise explicitly sample atmospheric pressure in hPa for 1-10 seconds (saved default 4). fresh=true bypasses only the cache. New measurements require a connected paired route, synchronized Agent interaction permission, enabled pressure metric and its cooldown/slot. The representative value is the mean of at most 64 retained samples, not a calibrated whole-window average or blood pressure. Successful output confirms listener and bounded CPU-lock cleanup; failures may provide no value. Never automatically retry.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -131,7 +157,7 @@
   },
   {
     "name": "measure_motion",
-    "description": "Read a permitted same-kind/same-duration recent result, otherwise explicitly sample accelerometer including gravity (m/s^2) or gyroscope (rad/s), for 1-10 seconds (saved default 4). Default kind is accelerometer. fresh=true bypasses only the cache. New measurements require a connected paired route, synchronized Agent interaction permission, enabled metric and its cooldown/slot. Returns at most 64 raw watch-axis samples with receipt/source metadata, not steps, distance, posture, walking or sleep. Source sampling age and calibration are unverified. Successful output confirms listener and bounded CPU-lock cleanup. Never automatically retry.",
+    "description": "当任务需要手表的原始加速度或陀螺仪数据时使用，例如采几秒腕部转动数据做比较。按需选择传感器，缺少同类型、同时长的有效缓存时尝试新采样。\n\nRead a permitted same-kind/same-duration recent result, otherwise explicitly sample accelerometer including gravity (m/s^2) or gyroscope (rad/s), for 1-10 seconds (saved default 4). Default kind is accelerometer. fresh=true bypasses only the cache. New measurements require a connected paired route, synchronized Agent interaction permission, enabled metric and its cooldown/slot. Returns at most 64 raw watch-axis samples with receipt/source metadata, not steps, distance, posture, walking or sleep. Source sampling age and calibration are unverified. Successful output confirms listener and bounded CPU-lock cleanup. Never automatically retry.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -163,7 +189,7 @@
   },
   {
     "name": "cancel_measurement",
-    "description": "Request cancellation of the bounded measurement matching request_id; other metrics continue. Omitting request_id captures and cancels all measurements active at that moment, including get_user_state motion windows. Active IDs can be read with get_capabilities or the dashboard. The cancellation reply is not proof of cleanup: inspect the original measurement result for listenersReleased and requestWakeLockHeldAtResult. A missing/finished ID returns no_active_measurement. Identical callers share one physical measurement and ID, so cancellation affects every caller sharing it. Does not stop the connection or continuous heart broadcast. May be called after Agent interaction closes. MCP protocol cancellation notifications alone do not invoke this tool.",
+    "description": "当需要停止正在进行的临时测量时使用。取消单项时指定 request_id，只有确实需要取消当前所有临时测量时才省略。\n\nRequest cancellation of the bounded measurement matching request_id; other metrics continue. Omitting request_id captures and cancels all measurements active at that moment, including get_user_state motion windows. Active IDs can be read with get_capabilities or the dashboard. The cancellation reply is not proof of cleanup: inspect the original measurement result for listenersReleased and requestWakeLockHeldAtResult. A missing/finished ID returns no_active_measurement. Identical callers share one physical measurement and ID, so cancellation affects every caller sharing it. Does not stop the connection or continuous heart broadcast. May be called after Agent interaction closes. MCP protocol cancellation notifications alone do not invoke this tool.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -183,7 +209,7 @@
   },
   {
     "name": "send_reminder",
-    "description": "Immediately send explicit plain-text content to the watch with optional vibration and screen wake, through the shared Agent interaction gate. Requires a new unique reminder_id; reuse the SAME ID and identical content/effects for an uncertain retry, never generate a new ID to retry. Same retained ID returns the old receipt without replay or renewed TTL (bounded 128-entry history). No automatic resend on timeout/reconnect. Default strong template vibrates twice and wakes the screen; flags override it. Issued means API called, displayed means page shown, only acknowledgedAtMs means the user tapped acknowledgement. Respects DND/lock screen. This is an immediate reminder, not a scheduled task. Check get_capabilities for user-controlled effect permissions and current limits: default maximum vibration sequence including gaps is 6000ms; the user may change it within the 10000ms technical ceiling. Screen duration must also obey the user limit. Tools cannot change these user settings; an over-limit request is rejected. Sound defaults to false. Set sound=true and sound_source=system to request one system notification tone, only if the user has enabled sound permission. Silent/DND/notification volume and channel settings still apply. Custom audio is reserved and not implemented. soundIssued=true means MediaPlayer.start() was called; soundCompletedAtMs is a completion callback, neither proves audible output. Local deduplication and the watch journal are bounded (128 retained IDs); after eviction there is no permanent exactly-once guarantee. Do not replay an old intent with any ID.",
+    "description": "当用户要求立即提醒，或当前情况符合用户事先授权的提醒条件时，向手表发送即时提醒。需要提醒时，无论任务紧急程度，一律保留默认强档（strong），省略 template 即可。按用户反馈，标准档和轻振档通常难以察觉，强档的两次短振日常可接受。整组约 0.94 秒，默认亮屏、无提示音。仅在用户明确要求减弱、静默或自定义时覆盖默认振动。例如，长任务已获授权在需要本人介入时通知，遇到等待用户登录、确认或选择的节点，可先用 get_user_state 的空指标列表确认在腕，再提醒用户回来处理。离腕或无法确认时，把待处理事项留在电脑上。\n\nImmediately send explicit plain-text content to the watch with optional vibration and screen wake, through the shared Agent interaction gate. Requires a new unique reminder_id; reuse the SAME ID and identical content/effects for an uncertain retry, never generate a new ID to retry. Same retained ID returns the old receipt without replay or renewed TTL (bounded 128-entry history). No automatic resend on timeout/reconnect. Default strong template vibrates twice and wakes the screen; flags override it. Issued means API called, displayed means page shown, only acknowledgedAtMs means the user tapped acknowledgement. Respects DND/lock screen. This is an immediate reminder, not a scheduled task. Check get_capabilities for user-controlled effect permissions and current limits: default maximum vibration sequence including gaps is 6000ms; the user may change it within the 10000ms technical ceiling. Screen duration must also obey the user limit. Tools cannot change these user settings; an over-limit request is rejected. Sound defaults to false. Set sound=true and sound_source=system to request one system notification tone, only if the user has enabled sound permission. Silent/DND/notification volume and channel settings still apply. Custom audio is reserved and not implemented. soundIssued=true means MediaPlayer.start() was called; soundCompletedAtMs is a completion callback, neither proves audible output. Local deduplication and the watch journal are bounded (128 retained IDs); after eviction there is no permanent exactly-once guarantee. Do not replay an old intent with any ID.",
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -226,7 +252,7 @@
             "notification_only"
           ],
           "default": "strong",
-          "description": "Strong/standard/light vibrate and wake; silent only wakes; notification_only does neither."
+          "description": "Keep strong for ordinary and urgent reminders alike. The user accepts its two short pulses and usually misses weaker vibration. Only change vibration on explicit user request. Strong, standard and light vibrate and wake the screen. Silent only wakes the screen and notification_only only posts a notification."
         },
         "vibrate": {
           "type": "boolean",
@@ -296,7 +322,7 @@
   },
   {
     "name": "get_reminder_status",
-    "description": "Read one reminder's saved PC attempt and receipt by ID. Default fresh=false only reads local data and works while Agent interaction is off. Explicit fresh=true queries the watch and requires the same synchronized interaction gate as other new watch reads. Does not send the reminder again. Receipt age is PC receipt age, not proof the user saw or read the content.",
+    "description": "当需要查看一条提醒的处理状态、核对用户是否点过确认，或在发送结果不确定时查证，使用原 reminder_id 查询回执。attemptStatus 表示当次发送尝试的结果，status 表示结合回执后的当前已知状态。例如 issued 和 acknowledged 可同时出现，表示当时已下发，后来用户点了确认。\n\nRead one reminder's saved PC attempt and receipt by ID. Default fresh=false only reads local data and works while Agent interaction is off. Explicit fresh=true queries the watch and requires the same synchronized interaction gate as other new watch reads. Does not send the reminder again. A successful query can return a failed send attempt. Receipt age is PC receipt age, not proof the user saw or read the content.",
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -324,7 +350,7 @@
   },
   {
     "name": "measure_heart_rate",
-    "description": "Explicitly request one fresh valid heart-rate callback, waiting at most 15 seconds (default 15). Requires synchronized Agent interaction, connection and heart-rate permission. Uses the same physical heart listener as continuous broadcast, but never enables the broadcast switch. Ends on the first valid callback, timeout, cancellation or disconnect; releases only this request's sensor ownership and bounded CPU lock, preserving existing broadcast. May return timeout/no_contact/no_valid_data instead of a number; never auto-retry. cancel_measurement can cancel it. get_heart_rate can subsequently read the saved valid result.",
+    "description": "当用户要求重测，或当前任务确实需要一次新的心率读数时使用。用 wait_seconds 指定最多等待几秒，拿到首个有效心率即结束。近期已有读数足够时使用 get_heart_rate。\n\nExplicitly request one fresh valid heart-rate callback, with wait_seconds as the maximum wait (1–15 seconds, default 15). seconds is a compatibility alias; pass only one. Requires synchronized Agent interaction, connection and heart-rate permission. Uses the same physical heart listener as continuous broadcast, but never enables the broadcast switch. Ends on the first valid callback, timeout, cancellation or disconnect; releases only this request's sensor ownership and bounded CPU lock, preserving existing broadcast. May return timeout/no_contact/no_valid_data instead of a number; never auto-retry. cancel_measurement can cancel it. get_heart_rate can subsequently read the saved valid result.",
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -335,22 +361,38 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "seconds": {
+        "wait_seconds": {
           "type": "integer",
           "minimum": 1,
           "maximum": 15,
           "default": 15,
-          "description": "Maximum callback wait, not a promise of a valid result within this time."
+          "description": "等待首个有效心率读数的上限。取得有效值后立即结束。"
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 15,
+          "description": "旧版兼容参数，等同于 wait_seconds。二者只能传一个。"
         }
+      },
+      "not": {
+        "required": [
+          "wait_seconds",
+          "seconds"
+        ]
       }
     }
   },
   {
     "name": "get_user_state",
-    "description": "Perform one fresh bounded 30-second accelerometer/gyroscope observation and return a compact three-tier local guess or unknown: possible rest; likely awake with little activity; likely awake with clear activity. Requires both motion metrics enabled and synchronized Agent interaction. Uses existing heart readings observed during this request only; never enables continuous heart capture. Service availability implies normal wear by the user's convention, not automatic wear detection. Awake/rest are unvalidated guesses, not measured facts; no sleep or walking recognition. No history query, periodic sampling, reminders or raw arrays. Takes about 30-40 seconds. cancel_measurement can cancel active windows from another call/client. Do not automatically retry unknown/insufficient-evidence results. Same-time state queries return busy. No heart capture is started even when rest evidence needs heart readings; very quiet motion without sufficient stable heart receipts returns unknown. This is the only tool returning weak activity/rest tiers; never reinterpret its awake labels as measured wakefulness.",
+    "description": "获取佩戴、睡眠、心率、活动及身心压力状态。默认只查佩戴；metrics=[] 也只查佩戴。按需显式选择 sleep、heart_rate、accelerometer、gyroscope、stress。压力点测仅在选择 stress 时启动，确认在腕后会亮屏并占用原厂前台，通常约24秒，最多等待65秒的原厂页面结果。已知用户正在活动时传 wearer_state=moving 跳过，只有确定静止时才传 still，其余默认 unknown。手表需开启 HeartRadio 压力点测无障碍服务。stress.ok=true 时为本次 score，成功且已启用健康归档时保存在电脑；其他指标失败仍返回有效项目。stress.status=stock_no_valid_reading 表示原厂明确失败，no_fresh_result 表示65秒没有新分数，不代表已观察到原厂明确失败。无分数不得使用旧值，运动准确度未验证，不要自动重试或从分数推断情绪。默认综合状态不包括压力，避免无谓唤醒。历史压力用 get_watch_health_history 查询。\n\nAll evidence comes from the watch. First check native wear; if off-wrist or wear is unconfirmed, skip fresh stress, heart rate and motion as applicable. Sleep returns the latest vendor event 490 and its time (may lag actual state). Heart rate uses a recent valid reading or bounded measurement. Both motion sensors run 30 seconds and are required for the weak activity tier. Explicit stress uses the original pressure page, runs in parallel with selected sensors, and may interrupt the watch display. A fresh score appears only in stress.score; no old score fallback. ArchiveStatus describes persistence. Return partial evidence for unavailable metrics. Do not retry unknown results.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "metrics": {"type": "array", "minItems": 0, "maxItems": 5, "uniqueItems": true, "items": {"type": "string", "enum": ["sleep", "heart_rate", "accelerometer", "gyroscope", "stress"]}},
+        "include_sleep": {"type": "boolean", "description": "Legacy selector. True selects the four legacy metrics and false omits sleep. Stress always requires explicit metrics selection. Use on its own."},
+        "wearer_state": {"type": "string", "enum": ["still", "moving", "unknown"], "description": "Only with metrics containing stress. Known moving skips pressure measurement; default unknown."}
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -359,5 +401,36 @@
       "idempotentHint": false,
       "openWorldHint": false
     }
+  },
+  {
+    "name": "get_watch_health_history",
+    "description": "当任务需要回看过去的步数、心率、身心压力、佩戴观测或睡眠记录时使用，例如查询昨天每小时的步数或近一周的睡眠分期。只读取电脑上已归档且获准读取的数据。\n\nRead authorized health records from the computer archive only, including when the watch is offline. Returns daily activity steps and the latest snapshot, wear observations, unverified current sleep observations, historical sleep summaries, or native heart-rate records. Missing or partial windows do not imply zero steps or no sleep. Defaults to the last seven Beijing dates. The timeline view requires one date and metric. Activity timelines include all 24 hourly totals and recorded-minute counts. A missing hour has steps=null. For minute records, continue with nextMinuteOffset. For historical sleep, pass the returned nextSegmentOffset as offset to continue after up to 100 segments per page. For native heart rate, continue with nextSampleOffset. Stress records are successful HeartRadio-triggered point tests saved on the PC, not native historical sync. Daily summaries include count and score range; timeline uses observations with nextObservationOffset. Empty periods remain empty.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "metrics": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"type": "string", "enum": ["activity", "wear", "current_sleep", "historical_sleep", "heart_rate", "stress"]}},
+        "start_date": {"type": "string", "pattern": "[0-9]{4}-[0-9]{2}-[0-9]{2}"},
+        "end_date": {"type": "string", "pattern": "[0-9]{4}-[0-9]{2}-[0-9]{2}"},
+        "device_id": {"type": "string", "pattern": "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"},
+        "view": {"type": "string", "enum": ["summary", "timeline"]},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 10000}
+      },
+      "required": ["metrics"],
+      "additionalProperties": false
+    },
+    "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+  },
+  {
+    "name": "read_watch_health_now",
+    "description": "当任务需要直接查询手表的当前累计步数、佩戴观测或本轮最近的原厂睡眠报告时使用。查询以往日期的记录时使用 get_watch_health_history。\n\nRead selected native watch metrics. Requires synchronized interaction and per-metric permission, rechecked before returning readings. Returns current cumulative steps, an on/off-wrist observation, or the watch's latest vendor sleep event 490 and its time. Sleep remains unknown until a valid event arrives in the active listener. Event time may lag the person's actual state. Older watch software can return an unverified sleep code. When archiving is enabled, observations can be saved to the computer. For history use get_watch_health_history.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "metrics": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"type": "string", "enum": ["activity", "wear", "current_sleep"]}}
+      },
+      "required": ["metrics"],
+      "additionalProperties": false
+    },
+    "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}
   }
 ]

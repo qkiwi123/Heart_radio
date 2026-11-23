@@ -89,6 +89,8 @@ class ConcurrentReadingTests(unittest.TestCase):
         self.assertEqual(result['failedMetrics'],['pressure']);json.dumps(result,allow_nan=False)
 
     def test_invalid_combinations_do_not_start_measurement(self):
+        with self.assertRaisesRegex(ValueError, 'metrics'):
+            self.access.call('read_watch_data', {})
         for metrics in ([],['pressure','pressure'],['location'],[1],True):
             with self.assertRaises(ValueError):self.access.call('read_watch_data',dict(metrics=metrics))
         self.assertEqual(self.calls,[])
@@ -99,6 +101,42 @@ class ConcurrentReadingTests(unittest.TestCase):
         self.assertEqual(combined['results']['heart_rate']['requestedSeconds'],5)
         single=self.access.call('measure_heart_rate',{})
         self.assertEqual(single['requestedSeconds'],15)
+
+    def test_heart_wait_parameters_and_compatibility_aliases(self):
+        self.release_all()
+        for field in ('wait_seconds', 'seconds'):
+            result = self.access.call('measure_heart_rate', {field: 8})
+            self.assertEqual(result['requestedSeconds'], 8)
+        for field in ('heart_wait_seconds', 'heart_seconds'):
+            result = self.access.call('read_watch_data', {'metrics':['heart_rate','pressure'],
+                                                        'fresh':True, 'seconds':2, field:11})
+            self.assertEqual(result['results']['heart_rate']['requestedSeconds'], 11)
+            self.assertEqual(result['results']['pressure']['requestedSeconds'], 2)
+        self.calls.clear()
+        for name, args in (
+            ('measure_heart_rate', {'seconds':8, 'wait_seconds':9}),
+            ('read_watch_data', {'metrics':['heart_rate'], 'heart_seconds':8, 'heart_wait_seconds':9}),
+        ):
+            with self.assertRaisesRegex(ValueError, 'Use only one of'):
+                self.access.call(name, args)
+        self.assertEqual(self.calls, [])
+
+    def test_compact_batch_summarizes_axes_without_discarding_full_samples(self):
+        self.release_all()
+        settings = dict(self.access.policy.read(), sensorCacheSeconds=60)
+        self.access.policy.save(settings)
+        args = dict(metrics=['pressure', 'accelerometer', 'gyroscope'])
+        short = self.access.call('read_watch_data', dict(args, compact=True))
+        self.assertTrue(short['complete'])
+        self.assertEqual(short['results']['pressure']['value'], 1000)
+        for metric in args['metrics']:
+            self.assertNotIn('samples', short['results'][metric])
+        for metric in ('accelerometer', 'gyroscope'):
+            self.assertEqual(short['results'][metric]['axisSummary'], {'min':[1,2,3], 'max':[1,2,3]})
+        full = self.access.call('read_watch_data', args)
+        for metric in args['metrics']:
+            self.assertTrue(full['results'][metric]['cached'])
+            self.assertTrue(full['results'][metric]['samples'])
 
 
 if __name__=='__main__':unittest.main()

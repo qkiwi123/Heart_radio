@@ -1,8 +1,10 @@
 """Loopback-only dashboard with optional desktop displays; receiver stays independent."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import io
 from build_identity import server_build
+from host_connectivity import HostConnectivity
 import os
 import json
 from project_shutdown import shutdown_project
@@ -17,6 +19,7 @@ from state import LogReader
 from widgets import Widgets
 from history import HistoryStore, period
 from data_access import DataAccess, TOOLS
+from user_state import selected_state_metrics
 from current_export import csv_chunks as current_csv_chunks
 from transport_access import transport
 from reminders import Reminders
@@ -27,6 +30,9 @@ from diagnostic_log import Maintenance
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'receiver'))
 from control import read_settings, save_settings
+from health_history import HealthHistory
+from health_protocol import HISTORY_METRICS
+from health_sync import HealthSync
 sys.path.insert(0, str(ROOT / 'scripts'))
 from capability_service import CapabilityService
 capability_service = CapabilityService(ROOT)
@@ -38,6 +44,7 @@ lock = threading.Lock()
 widgets = Widgets(ROOT)
 history = HistoryStore(ROOT)
 SERVER_BUILD = server_build(ROOT)
+host_connectivity = HostConnectivity()
 
 
 def heart_snapshot():
@@ -46,11 +53,110 @@ def heart_snapshot():
     return transport.heart_snapshot(wifi_snapshot)
 
 
-data_access = DataAccess(ROOT, heart_snapshot,reminder_policy=transport.reminder_policy_state)
+health_history = HealthHistory(ROOT)
+data_access = DataAccess(ROOT, heart_snapshot,reminder_policy=transport.reminder_policy_state,
+                         wear_permitted=lambda: 'wear' in health_history.settings()['liveMetrics'])
 transport.on_gate_closed=data_access.cancel
 reminders=Reminders(ROOT,lambda op,params:transport.request(op,params),policy=transport.reminder_limits)
 transport.on_reminder_receipt=reminders.observe
 reminder_sync=ReminderSync(reminders,transport.reminder_sync_context)
+health_sync = HealthSync(health_history, transport.request, transport.reminder_sync_context, transport.state)
+
+
+def call_tool(name, arguments):
+    if name in reminder_tools.NAMES:
+        return reminder_tools.call(reminders,name,arguments)
+    if name == 'get_watch_health_history':
+        return health_history.query(arguments)
+    if name == 'read_watch_health_now':
+        return health_sync.now(arguments)
+    if name == 'get_user_state':
+        metrics = selected_state_metrics(arguments)
+        include_sleep = 'sleep' in metrics
+        include_stress = 'stress' in metrics
+        wearer_state = arguments.get('wearer_state', 'unknown')
+        token = health_sync.context()
+        archive_revision = health_history.revision
+        observations = health_sync.now({'metrics':['wear']})['results']
+        wear = observations['wear']
+        if wear['status'] == 'ok' and wear['value'] == 'off_wrist':
+            result = dict(ok=True, status='off_wrist', tier=None, label='未佩戴', wear=wear,
+                          wearBasis='watch_native', reason='watch_off_wrist', requestedMetrics=list(metrics))
+            if include_sleep:
+                result['sleep'] = dict(value='unknown', status='off_wrist')
+            if include_stress:
+                result['stress'] = dict(ok=False, status='off_wrist')
+            return result
+        wear_confirmed = wear['status'] == 'ok' and wear['value'] == 'worn'
+        sensors = [metric for metric in metrics if metric not in ('sleep','stress')]
+        sleep_args = {'metrics':['current_sleep']}
+        stress = dict(ok=False, status='wear_unconfirmed')
+        with ThreadPoolExecutor(max_workers=3) as worker:
+            sensor_future = worker.submit(data_access.call, name, {'metrics':sensors},
+                                          wear_confirmed=wear_confirmed) if sensors else None
+            sleep_future = worker.submit(health_sync.now, sleep_args) if include_sleep else None
+            stress_future = (worker.submit(data_access.measure_stress, wearer_state)
+                             if include_stress and wear_confirmed else None)
+            result = (sensor_future.result() if sensor_future else
+                      dict(ok=wear['status']=='ok', status=wear['status'], tier=None, label='暂不判断'))
+            if sleep_future:
+                observations.update(sleep_future.result()['results'])
+            if stress_future:
+                stress = stress_future.result()
+        if token is not None and token != health_sync.context():
+            result = dict(ok=False, status='connection_changed', tier=None, label='暂不判断',
+                          wear=dict(value='unknown', status='connection_changed'), requestedMetrics=list(metrics))
+            if include_sleep:
+                result['sleep'] = dict(value='unknown', status='connection_changed')
+            if include_stress:
+                result['stress'] = dict(ok=False, status='connection_changed')
+            return result
+        observations = health_sync.permitted_live_results(observations)
+        wear = result['wear'] = observations['wear']
+        if wear['status'] == 'ok' and wear['value'] == 'worn':
+            result['wearBasis'] = 'watch_native'
+        elif wear_confirmed:
+            result.pop('wearBasis', None)
+            if result.get('tier') is not None or 'motion' in result:
+                result.update(status='partial', tier=None, label='暂不判断', reason='wear_unconfirmed')
+                result.pop('motion', None)
+                result.pop('summary', None)
+        if include_sleep:
+            sleep = result['sleep'] = observations['current_sleep']
+            if sleep.get('messageId') == 490 and sleep['status'] in ('ok', 'no_data'):
+                if not result.get('ok') or not sensors:
+                    result.update(ok=True, status='partial' if sensors else sleep['status'])
+                if wear.get('value') == 'worn' and sleep['value'] == 'sleeping':
+                    if result.get('tier') == 3:
+                        result.update(label='睡眠报告与当次运动观测不一致', assessmentStatus='conflicting_evidence')
+                    else:
+                        result['label'] = '原厂报告睡眠中'
+                elif wear.get('value') == 'worn' and sleep['value'] == 'not_sleeping' and result.get('tier') is None:
+                    result['label'] = '原厂最近报告非睡眠'
+            elif not sensors:
+                result.update(status=sleep.get('status', 'invalid_result'), ok=wear['status']=='ok')
+        if include_stress:
+            if wear.get('value') != 'worn' or wear['status'] != 'ok':
+                stress = dict(ok=False, status='wear_unconfirmed')
+            if stress.get('ok'):
+                try:
+                    archive_status = health_history.record_stress(wear.get('deviceId'), stress, archive_revision)
+                except (OSError, sqlite3.Error):
+                    archive_status = 'storage_error'
+                stress = dict(stress, archiveStatus=archive_status)
+            result['stress'] = stress
+            if not sensors and not include_sleep:
+                result.update(ok=stress['ok'], status=stress['status'], label='佩戴中' if wear_confirmed else '暂不判断')
+            elif not stress['ok'] or not result['ok']:
+                result.update(ok=bool(result['ok'] or stress['ok']),
+                              status='partial' if result['ok'] or stress['ok'] else 'insufficient_data')
+        if not metrics:
+            result.update(ok=wear['status']=='ok', status=wear['status'])
+            if wear.get('value') == 'worn':
+                result['label'] = '佩戴中'
+        result['requestedMetrics'] = list(metrics)
+        return result
+    return data_access.call(name, arguments)
 
 def capability_status():
     if transport.managed is not True:return capability_service.status()
@@ -85,6 +191,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_request(): return
         # A cross-origin form cannot send this header or application/json without preflight.
         actions = {'/api/widgets':'widgets', '/api/receiver-settings':'receiver-settings', '/api/tools':'tools',
+                   '/api/health-settings':'health-settings', '/api/health-sleep-stages':'health-sleep-stages',
                    '/api/capability-service':'capability-service', '/api/capability-settings':'capability-settings',
                    '/api/data-settings':'data-settings', '/api/capability-duration':'capability-duration', '/api/connection':'connection','/api/dashboard-stop':'dashboard-stop','/api/reminders':'reminders','/api/reminder-policy':'reminder-policy'}
         if self.path not in actions: self.reject(404); return
@@ -104,13 +211,12 @@ class Handler(BaseHTTPRequestHandler):
                 else:raise ValueError('Invalid reminder action')
             elif self.path=='/api/dashboard-stop':
                 if request!={'action':'stop'}:raise ValueError('Invalid dashboard action')
-                data_access.cancel();transport.stop()
+                health_sync.stop();data_access.cancel();transport.stop()
                 value=dict(status='stopping',pid=os.getpid())
                 threading.Thread(target=self.server.shutdown,name='dashboard-shutdown',daemon=True).start()
             elif self.path == '/api/tools':
                 if not isinstance(request,dict) or set(request) != {'name','arguments'}: raise ValueError('无效的工具请求')
-                value=(reminder_tools.call(reminders,request['name'],request['arguments'])
-                       if request['name'] in reminder_tools.NAMES else data_access.call(request['name'],request['arguments']))
+                value=call_tool(request['name'],request['arguments'])
             elif self.path == '/api/connection':
                 if not isinstance(request,dict):raise ValueError('Invalid connection request')
                 if request.get('action') in ('agent_off','stop','shutdown','use_legacy_wifi','start_bluetooth','set_mode'):data_access.cancel()
@@ -127,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
                 value=capability_service.save(request)
             elif self.path == '/api/data-settings':
                 value=data_access.policy.save(request)
+            elif self.path == '/api/health-settings':
+                value=health_history.save_settings(request)
+            elif self.path == '/api/health-sleep-stages':
+                value=health_sync.fill_sleep_stages(request)
             elif self.path == '/api/capability-duration':
                 value=capability_service.save_duration(request)
             else:
@@ -145,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Type','application/json; charset=utf-8')
             self.send_header('Cache-Control','no-store')
             self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
-        except OSError as error:
+        except (OSError,sqlite3.Error) as error:
             data=json.dumps(dict(error=str(error)),ensure_ascii=False).encode('utf-8')
             self.send_response(503)
             self.send_header('Content-Type','application/json; charset=utf-8')
@@ -160,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             request_path=urlsplit(self.path).path
             if request_path=='/api/version':
-                data=json.dumps(dict(version='1.12.0-dashboard',watchVersion='1.11.0-state',mcpPackageVersion='0.7.0',serverBuild=SERVER_BUILD,pid=os.getpid())).encode();mime='application/json; charset=utf-8'
+                data=json.dumps(dict(version='1.18.0-stress-history',watchVersion='1.14.1-stress',mcpPackageVersion='0.13.0',serverBuild=SERVER_BUILD,pid=os.getpid())).encode();mime='application/json; charset=utf-8'
             elif request_path=='/api/reminders/history':
                 try:
                     query=parse_qs(urlsplit(self.path).query,keep_blank_values=True,max_num_fields=4)
@@ -175,9 +285,52 @@ class Handler(BaseHTTPRequestHandler):
             elif request_path=='/api/reminder-policy':
                 data=json.dumps(transport.reminder_policy_state(),ensure_ascii=False,allow_nan=False).encode('utf-8');mime='application/json; charset=utf-8'
             elif request_path == '/api/connection':
-                data=json.dumps(transport.state(),ensure_ascii=False).encode('utf-8');mime='application/json; charset=utf-8'
+                value = dict(transport.state(), hostConnectivity=host_connectivity.snapshot())
+                data=json.dumps(value,ensure_ascii=False).encode('utf-8');mime='application/json; charset=utf-8'
             elif request_path == '/api/data':
-                data=json.dumps(data_access.cached(),ensure_ascii=False,allow_nan=False).encode('utf-8'); mime='application/json; charset=utf-8'
+                value = data_access.cached()
+                try:
+                    value['latestStress'] = health_history.latest_stress()
+                except (OSError, sqlite3.Error):
+                    value['latestStress'] = None
+                    value['stressArchiveError'] = True
+                data=json.dumps(value,ensure_ascii=False,allow_nan=False).encode('utf-8'); mime='application/json; charset=utf-8'
+            elif request_path == '/api/health-settings':
+                data=json.dumps(dict(settings=health_history.settings(),sync=health_sync.state())).encode('utf-8')
+                mime='application/json; charset=utf-8'
+            elif request_path == '/api/health-timeline':
+                try:
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=3)
+                    if set(query) - {'date', 'days', 'device_id'} or any(len(v) != 1 for v in query.values()):
+                        raise ValueError('Invalid timeline selection')
+                    end = query.get('date', [''])[0]
+                    days = int(query.get('days', ['1'])[0])
+                    device = query.get('device_id', [None])[0]
+                    value = health_history.timeline(end, days, device)
+                    value['heartRadio'], value['heartRadioMinutes'] = history.timeline(
+                        value['startDate'], end, value['startAtMs'], value['endAtMs'])
+                except (ValueError, OverflowError):
+                    self.send_error(400, 'Invalid timeline selection')
+                    return
+                data = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
+                mime = 'application/json; charset=utf-8'
+            elif request_path == '/api/health-history':
+                try:
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=6)
+                    allowed = {'metric', 'start_date', 'end_date', 'device_id', 'view', 'offset'}
+                    if set(query) - allowed or any(len(values) != 1 for values in query.values()):
+                        raise ValueError('Invalid history selection')
+                    arguments = {key: values[0] for key, values in query.items()}
+                    metric = arguments.pop('metric', None)
+                    arguments['metrics'] = [metric] if metric is not None else list(HISTORY_METRICS)
+                    if 'offset' in arguments:
+                        arguments['offset'] = int(arguments['offset'])
+                    value = health_history.query(arguments, local_view=True)
+                except ValueError:
+                    self.send_error(400, 'Invalid health history selection')
+                    return
+                data=json.dumps(value,ensure_ascii=False,allow_nan=False).encode('utf-8')
+                mime='application/json; charset=utf-8'
             elif request_path == '/api/data-settings':
                 data=json.dumps(data_access.policy.read(),ensure_ascii=False,allow_nan=False).encode('utf-8'); mime='application/json; charset=utf-8'
             elif request_path == '/api/capability-duration':
@@ -256,6 +409,8 @@ class Handler(BaseHTTPRequestHandler):
                 files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/polish.css':'polish.css'}
                 files['/history.js']='history.js'
                 files['/data.js']='data.js'
+                files['/health.js']='health.js'
+                files['/health-timeline.js']='health-timeline.js'
                 files['/connection.js']='connection.js'
                 files['/reminders.js']='reminders.js'
                 files['/reminder-history.js']='reminder-history.js'
@@ -282,12 +437,13 @@ if __name__=='__main__':
     server=ThreadingHTTPServer(('127.0.0.1',a.port),Handler)
     maintenance=Maintenance(ROOT);maintenance.start()
     def offline_shutdown():
+        health_sync.stop()
         shutdown_project(ROOT,transport,data_access,capability_service,widgets,server)
     transport.on_offline_timeout=offline_shutdown
     monitor_stop=threading.Event()
     def monitor_project():
         while not monitor_stop.wait(1):
-            transport._check_offline_timeout();reminder_sync.tick()
+            transport._check_offline_timeout();reminder_sync.tick();health_sync.tick()
     threading.Thread(target=monitor_project,name='project-idle-monitor',daemon=True).start()
     print(f'HeartRadio dashboard http://127.0.0.1:{a.port}',flush=True)
     try: server.serve_forever()
@@ -295,6 +451,7 @@ if __name__=='__main__':
     finally:
         monitor_stop.set()
         reminder_sync.stop()
+        health_sync.stop()
         maintenance.stop()
         try:transport.stop()
         finally:widgets.close();server.server_close();data_access.close()

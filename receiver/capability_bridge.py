@@ -20,7 +20,9 @@ from lan import LanAdapter, private_ipv4
 from discovery import Discovery, discovery_socket
 
 MAX_FRAME = 65536
-OPS = {'inventory', 'status', 'sample','heart_sample','motion_window', 'cached_location', 'locate', 'cancel','control_state','select_transport','stop_bridge','sync_interaction','sync_broadcast','sync_reminder_policy','remind','reminder_status'}
+from health_protocol import HEALTH_OPS, STRESS_REPLY_SECONDS, health_log_summary, validate_health_request
+
+OPS = {'inventory', 'status', 'sample','heart_sample','motion_window', 'cached_location', 'locate', 'cancel','control_state','select_transport','stop_bridge','sync_interaction','sync_broadcast','sync_reminder_policy','remind','reminder_status'} | HEALTH_OPS
 
 
 def frame(value):
@@ -49,7 +51,9 @@ def validate_request(value):
     from reminder_protocol import FIELDS,normalize,validate_status
     allowed = {'remind':FIELDS,'reminder_status':{'reminderId'},'sample': {'sensorId', 'seconds', 'periodUs'}, 'locate': {'provider', 'seconds'},
                'heart_sample':{'sensorId','seconds'},'motion_window':{'sensorId','seconds'},'cancel': {'targetId'},'select_transport':{'selectionId'},'sync_interaction':{'selectionId','syncId','state'},'sync_broadcast':{'selectionId','syncId','state'},'sync_reminder_policy':{'selectionId','syncId','state'}}.get(value['op'], set())
-    if set(params) - allowed:
+    if value['op'] in HEALTH_OPS:
+        validate_health_request(value['op'], params)
+    elif set(params) - allowed:
         raise ValueError('Unknown parameters')
     if value['op']=='motion_window':
         from motion_protocol import validate_motion_window
@@ -191,7 +195,7 @@ class Bridge:
             return dict(status='busy')
         if value['op'] == 'cancel':
             target = value['params']['targetId']
-            if target not in self.pending or self.pending[target].done() or self.pending_operations.get(target) not in ('sample', 'heart_sample', 'motion_window', 'locate'):
+            if target not in self.pending or self.pending[target].done() or self.pending_operations.get(target) not in ('sample', 'heart_sample', 'motion_window', 'locate', 'health_stress'):
                 return dict(status='not_active')
         request_id = value.pop('requestId', None) or uuid.uuid4().hex
         if request_id in self.pending: return dict(status='duplicate_request')
@@ -204,14 +208,16 @@ class Bridge:
         self.log('remote_request', request=request)
         try:
             await self.send(request, writer)
-            result = await asyncio.wait_for(future, value['params'].get('seconds', 5) + 8)
+            timeout = STRESS_REPLY_SECONDS if value['op'] == 'health_stress' else value['params'].get('seconds', 5) + 8
+            result = await asyncio.wait_for(future, timeout)
             result['pcRoundTripMs'] = (time.monotonic() - begin) * 1000
             result['transport'] = 'wifi_tls'
             result['adbUsedForRequest'] = False
-            self.log('remote_result', op=value['op'], result=result)
+            self.log('remote_result', op=value['op'],
+                     result=health_log_summary(result) if value['op'] in HEALTH_OPS else result)
             return result
         except asyncio.TimeoutError:
-            if value['op'] in ('sample','heart_sample','motion_window','locate'):
+            if value['op'] in ('sample','heart_sample','motion_window','locate','health_stress'):
                 try:await self.send(dict(id=uuid.uuid4().hex, op='cancel', params=dict(targetId=request_id)), writer)
                 except (ConnectionError, OSError):pass
             self.log('request_timeout', requestId=request_id)
@@ -276,7 +282,8 @@ class Bridge:
                     self.pending[request_id].set_result(result)
                 elif not str(request_id).startswith('ping_'):
                     # Retain late cleanup/results as evidence without satisfying a different request.
-                    self.log('late_or_unmatched_result', result=result)
+                    self.log('late_or_unmatched_result',
+                             result=health_log_summary(result) if result.get('op') in HEALTH_OPS else result)
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError, OSError, ValueError) as error:
             if approved:
                 self.last_disconnect_ms = time.time_ns() // 1000000
@@ -355,6 +362,8 @@ class Handler(BaseHTTPRequestHandler):
                 operation = self.server.bridge.request(validate_request(value))
             future = asyncio.run_coroutine_threadsafe(operation, self.server.loop)
             wait_seconds = max(75, value.get('params', {}).get('seconds', 5) + 15) if self.path == '/request' else 75
+            if value.get('op') == 'health_stress':
+                wait_seconds = STRESS_REPLY_SECONDS + 3
             result = future.result(timeout=wait_seconds)
         except (ValueError, KeyError, TypeError):
             self.send_error(400); return

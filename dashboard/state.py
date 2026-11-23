@@ -42,13 +42,18 @@ class State:
             self.receiver_limit = {key: row.get(key) for key in ('seconds','revision','endsMs')}
         elif kind == 'listener_changed':
             self.host = row.get('host')
-        elif kind == 'wifi_connected':
+        elif kind == 'route_changed':
+            self.last_event = None
+            self.current_allowed = False
+            self.segment += 1
+            self.invalid_reason = '连接方式已变更，等待新的心率事件'
+        elif kind in ('wifi_connected', 'rfcomm_connected'):
             self.watch_address = row.get('target')
             self.host = row.get('host', self.host)
             self.connected = True; self.stopped = False; self.connections += 1
             self.current_allowed = False; self.last_event = None; self.segment += 1
             self.invalid_reason = '已连接，等待新的心率事件'
-        elif kind in ('wifi_disconnected', 'server_stop'):
+        elif kind in ('wifi_disconnected', 'rfcomm_disconnected', 'server_stop'):
             self.connected = False; self.current_allowed = False; self.segment += 1
             if kind == 'server_stop': self.stopped = True; self.server_stop = row
             else: self.disconnects += 1

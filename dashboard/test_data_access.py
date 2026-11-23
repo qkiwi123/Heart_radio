@@ -90,6 +90,50 @@ class DataAccessTests(unittest.TestCase):
         self.assertEqual(self.access.cached()['bridge']['connectionSerial'], 2)
         self.assertEqual(self.calls, [])
 
+    def test_current_on_demand_route_is_independent_of_cached_wifi_diagnostics(self):
+        bridge = self.access.bridge
+        def reply(op, params=None, request_id=None):
+            if op == 'status':
+                return dict(status='ok', batteryPct=65, bridgeLifecycle={'state':'retry_wait'})
+            return bridge(op, params, request_id)
+
+        self.access.bridge = reply
+        self.connection.update(transport='rfcomm', connected=True, agentEnabled=True, automaticRouting=True,
+                               agentInteraction={'peerConfirmed':True})
+        batch = self.access.call('read_watch_data', {'metrics':['device_status','pressure']})
+        self.assertEqual(batch['onDemand'], dict(transport='bluetooth', ready=True, reason=None))
+        self.assertTrue(batch['complete'])
+        self.assertTrue(batch['results']['device_status']['ok'])
+        self.assertEqual(batch['results']['device_status']['data']['bridgeLifecycleScope'], 'wifi')
+        self.assertEqual(batch['results']['device_status']['data']['bridgeLifecycle']['state'], 'retry_wait')
+        self.connection.update(transport=None, connected=False)
+        cached = self.access.call('get_device_status', {})
+        self.assertTrue(cached['cached'])
+        self.assertTrue(cached['ok'])
+        self.assertEqual(cached['onDemand'], dict(transport=None, ready=False, reason='watch_offline'))
+        self.connection.update(transport='wifi', connected=True, agentInteraction={'peerConfirmed':False})
+        self.assertEqual(self.access.call('get_capabilities', {})['onDemand']['reason'], 'interaction_sync_pending')
+        self.connection.update(connected=False)
+        self.assertFalse(self.access.call('get_capabilities', {})['onDemand']['ready'])
+
+    def test_compact_capabilities_keep_effective_limits_and_wear_requirements(self):
+        original = self.access.reminder_policy
+        self.access.reminder_policy = lambda: dict(original(), state={'pc':{}, 'watch':{}},
+                                                   version='test-version', syncStatus='本端已设置，待同步')
+        full = self.access.call('get_capabilities', {})
+        short = self.access.call('get_capabilities', {'compact':True})
+        self.assertIn('state', full['reminders']['userPolicy'])
+        self.assertNotIn('state', short['reminders']['userPolicy'])
+        self.assertNotIn('version', short['reminders']['userPolicy'])
+        self.assertEqual(short['reminders']['userPolicy']['syncStatus'], '本端已设置，待同步')
+        self.assertEqual(short['reminders']['userPolicy']['limits'], full['reminders']['userPolicy']['limits'])
+        self.assertEqual(short['enabled'], full['enabled'])
+        self.assertEqual(short['userState']['wearSource'], 'watch_native')
+        self.assertTrue(short['userState']['requiresConfirmedWearForNewSampling'])
+        self.assertNotIn('wearBasis', short['userState'])
+        self.assertNotIn('wear_state', full['unavailable'])
+        self.assertEqual(self.calls, [])
+
 
 if __name__ == '__main__':
     unittest.main()

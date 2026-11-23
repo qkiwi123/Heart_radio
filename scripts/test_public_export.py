@@ -1,4 +1,7 @@
 """Publishing boundaries: never publish private history/data or dirty source."""
+import hashlib
+import json
+from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +10,36 @@ import export_public_repo as public
 
 
 class PublicExportTests(unittest.TestCase):
+    def test_all_dashboard_scripts_and_styles_are_in_the_public_package(self):
+        class Assets(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'script' and 'src' in attrs:
+                    paths.append(attrs['src'])
+                if tag == 'link' and attrs.get('rel') == 'stylesheet':
+                    paths.append(attrs['href'])
+        manifest = json.loads((public.ROOT / 'publish/manifest.json').read_text(encoding='utf-8'))
+        exported = set(manifest['sources']) | manifest['overrides'].keys()
+        paths = []
+        Assets().feed((public.ROOT / 'dashboard/static/index.html').read_text(encoding='utf-8'))
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertIn('dashboard/static/' + path.lstrip('/'), exported)
+
+    def test_manifest_includes_watch_production_sources(self):
+        manifest = json.loads((public.ROOT / 'publish/manifest.json').read_text(encoding='utf-8'))
+        exported = set(manifest['sources']) | manifest['overrides'].keys()
+        production = {path.relative_to(public.ROOT).as_posix()
+                      for path in (public.ROOT / 'app/src/main').rglob('*.kt')}
+        self.assertEqual(production - exported, set())
+
+    def test_protected_source_hashes_accept_checkout_line_endings(self):
+        source = b'first line\nsecond line\n'
+        expected = hashlib.sha256(source).hexdigest()
+        self.assertEqual(public.source_digest(source), expected)
+        self.assertEqual(public.source_digest(source.replace(b'\n', b'\r\n')), expected)
+        self.assertNotEqual(public.source_digest(source + b'changed'), expected)
+
     def test_private_and_generated_paths_are_always_rejected(self):
         for name in ['runs/ledger.json','evidence/personal.txt','.local-wifi/config.json','.idea/misc.xml',
                      'app/build/app.apk','dist/mcp/runtime.json','local.properties','private.key','app/src/test/real.csv',

@@ -22,7 +22,9 @@ CONFIG = ROOT / '.local-wifi' / 'rfcomm-probe.json'
 SERVICE = '749b3000-6f67-4d32-96dd-4d778c27a101'
 MAX_FRAME = 16384
 PORT = 8769
-OPS = {'ping', 'status', 'start_heart', 'stop_heart', 'remind', 'reminder_status', 'test_vibration', 'stop', 'control_state', 'inventory', 'sample', 'heart_sample','motion_window', 'cancel', 'stop_bridge', 'select_transport','sync_interaction','sync_broadcast','sync_reminder_policy'}
+from health_protocol import HEALTH_OPS, STRESS_REPLY_SECONDS, health_log_summary, validate_health_request
+
+OPS = {'ping', 'status', 'start_heart', 'stop_heart', 'remind', 'reminder_status', 'test_vibration', 'stop', 'control_state', 'inventory', 'sample', 'heart_sample','motion_window', 'cancel', 'stop_bridge', 'select_transport','sync_interaction','sync_broadcast','sync_reminder_policy'} | HEALTH_OPS
 
 
 def frame(value):
@@ -66,6 +68,7 @@ def read_frame(stream, keep_waiting=None):
 class Probe:
     def __init__(self, config, output, message_observer=None, record_heart=None):
         self.message_observer = message_observer
+        self.sync_snapshots = {}
         self.record_heart=record_heart
         self.config = config
         self.stream = DiagnosticLog(output)
@@ -102,6 +105,32 @@ class Probe:
                         ageSeconds=max(0,time.monotonic()-observation[2]), cached=True,
                         connectionSerial=observation[3], sourceAgeVerified=False) if observation else None)
 
+    def diagnostic_message(self, row):
+        op = row.get('op')
+        if op in HEALTH_OPS:
+            return health_log_summary(row)
+        field = {'sync_broadcast':'broadcast', 'sync_interaction':'interaction',
+                 'sync_reminder_policy':'policy'}.get(op)
+        if not self.record_heart or not field:
+            return row
+        if not isinstance(row.get('id'), str) or row.get('status') != 'ok' or not isinstance(row.get(field), dict):
+            self.sync_snapshots.pop(op, None)
+            return row
+        # Keep each acknowledgement and its timing. Reference a recent full reply
+        # only when the actual state is unchanged, including finite lease changes.
+        state = row[field]
+        stable = {k:v for k,v in state.items() if k != 'remainingMs'}
+        previous = self.sync_snapshots.get(op)
+        now = time.monotonic()
+        if previous and stable == previous[0] and now - previous[1] < 60:
+            compact = {k:v for k,v in row.items() if k != field}
+            compact['stateFromReply'] = previous[2]
+            if 'remainingMs' in state:
+                compact['remainingMs'] = state['remainingMs']
+            return compact
+        self.sync_snapshots[op] = (stable, now, row['id'])
+        return row
+
     def remember_heart_observation(self, row):
         observer=getattr(self,'message_observer',None)
         if observer:observer(row)
@@ -119,7 +148,9 @@ class Probe:
         allowed = {'ping': {'echo'}, 'remind': FIELDS,
                    'reminder_status': {'reminderId'}, 'sample': {'sensorId','seconds','periodUs'}, 'heart_sample':{'sensorId','seconds'}, 'motion_window':{'sensorId','seconds'}, 'cancel': {'targetId'},
                    'select_transport': {'selectionId'},'sync_interaction':{'selectionId','syncId','state'},'sync_broadcast':{'selectionId','syncId','state'},'sync_reminder_policy':{'selectionId','syncId','state'}}.get(value['op'], set())
-        if set(params) - allowed:
+        if value['op'] in HEALTH_OPS:
+            validate_health_request(value['op'], params)
+        elif set(params) - allowed:
             raise ValueError('Unknown parameters')
         if value['op']=='motion_window':
             from motion_protocol import validate_motion_window
@@ -158,7 +189,8 @@ class Probe:
                     return dict(status='watch_offline')
                 client.sendall(packet)
             self.log('command_sent', request=request, connectionSerial=self.connection_serial)
-            if not entry['event'].wait(40 if value['op']=='motion_window' else 22 if value['op'] in ('sample','heart_sample') else 12):
+            timeout = {'health_stress': STRESS_REPLY_SECONDS, 'motion_window': 40, 'sample': 22, 'heart_sample': 22}.get(value['op'], 12)
+            if not entry['event'].wait(timeout):
                 # The command may already have executed: never replay a timed-out reminder.
                 return dict(status='outcome_unknown_timeout', requestId=request_id)
             result = entry['result']
@@ -192,6 +224,7 @@ class Probe:
                 retry_delay = 3
                 health_stop=threading.Event()
                 try:
+                    self.log('connect_attempt', previousConnections=self.connection_serial, previousFailures=failures)
                     self.client = (connect(self.config['watchAddress'], SERVICE, min(20,max(.1,deadline-time.monotonic())),cancel=self.stopping)
                                    if persistent else connect(self.config['watchAddress'], SERVICE, min(20, max(.1, deadline-time.monotonic()))))
                     if self.stopping.is_set():break
@@ -200,6 +233,7 @@ class Probe:
                     if self.stopping.is_set():break
                     if hello.get('event') != 'hello' or hello.get('protocolVersion') != 1:
                         raise ValueError('Invalid watch greeting')
+                    self.sync_snapshots.clear()
                     self.connection_serial += 1
                     self.last_watch = hello
                     self.last_watch_monotonic = time.monotonic()
@@ -225,7 +259,8 @@ class Probe:
                         self.last_watch_monotonic=time.monotonic()
                         self.remember_heart_observation(row)
                         if row.get('event')!='heart' or self.record_heart is None or self.record_heart():
-                            self.log('watch_message', message=row, connectionSerial=self.connection_serial)
+                            self.log('watch_message', message=self.diagnostic_message(row),
+                                     connectionSerial=self.connection_serial)
                         if row.get('event') == 'heart_state':
                             self.log('heart_state_observed', state=row.get('heartState'), message=row.get('heartStateMessage'),
                                      connectionSerial=self.connection_serial)

@@ -99,7 +99,8 @@ class RfcommProbeService : Service() {
             val nm=getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(NotificationChannel("rfcomm_probe","蓝牙双向测试",NotificationManager.IMPORTANCE_LOW))
             val stop=PendingIntent.getService(this,31,Intent(this,if(managedConnection)ConnectionService::class.java else RfcommProbeService::class.java).setAction("STOP"),PendingIntent.FLAG_IMMUTABLE)
-            val open=PendingIntent.getActivity(this,32,Intent(this,RfcommProbeActivity::class.java),PendingIntent.FLAG_IMMUTABLE)
+            val screen = if (managedConnection) MainActivity::class.java else RfcommProbeActivity::class.java
+            val open=PendingIntent.getActivity(this,32,Intent(this,screen),PendingIntent.FLAG_IMMUTABLE)
             val notification=Notification.Builder(this,"rfcomm_probe").setSmallIcon(android.R.drawable.ic_menu_info_details)
                 .setContentTitle(if(managedConnection)"蓝牙连接" else "蓝牙双向测试中").setContentText(if(managedConnection)"心率与Agent交互独立控制" else "最长60分钟，可随时停止").setContentIntent(open)
                 .addAction(Notification.Action.Builder(null,"停止测试",stop).build()).build()
@@ -108,7 +109,7 @@ class RfcommProbeService : Service() {
             server=adapter.listenUsingRfcommWithServiceRecord("HeartRadio probe",SERVICE_UUID)
             active=true;endsNs=if(managedConnection)Long.MAX_VALUE else SystemClock.elapsedRealtimeNanos()+3_600_000_000_000L
             ProjectSession.monitor(this)
-            status="等待已配对电脑连接";audit("server_start",JSONObject().put("uuid",SERVICE_UUID).put("maximumSeconds",3600))
+            status="等待已配对电脑连接";audit("server_start",JSONObject().put("uuid",SERVICE_UUID).put("managed",managedConnection).put("maximumSeconds",if (managedConnection) JSONObject.NULL else 3600))
             worker=Thread({acceptConnections()},"rfcomm-probe-reader").also { it.start() }
             handler.post(ticker)
         } catch(e:Exception) { status="蓝牙测试失败：${e.message}";audit("start_failed",JSONObject().put("error",e.toString()));finish("start_failed",false) }
@@ -228,12 +229,14 @@ class RfcommProbeService : Service() {
         if(managedConnection&&op !in setOf("ping","control_state","stop","stop_heart","stop_bridge","cancel")&&!ConnectionService.owns("rfcomm",current.selectionId)){
             send(current,JSONObject().put("id",id).put("status","transport_not_selected"));return
         }
-        if(op in setOf("inventory","status","sample","heart_sample","motion_window","cancel","cached_location","locate","remind","reminder_status")) {
+        if(op in setOf("inventory","status","sample","heart_sample","motion_window","cancel","cached_location","locate","remind","reminder_status","health_now","health_history","health_stress")) {
             DeviceGateway.execute(this,request) { raw ->
                 if(op=="status"&&raw.optString("status")=="ok") {
                     val control=state();control.keys().forEach { key -> if(!raw.has(key))raw.put(key,control.get(key)) }
                 }
-                raw.put("id",id).put("op",op);audit("command_result",raw);send(current,raw)
+                raw.put("id",id).put("op",op)
+                if (!op.startsWith("health_")) audit("command_result",raw)
+                send(current,raw)
             }
             return
         }

@@ -8,13 +8,34 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Gravity
 import android.widget.*
+import org.json.JSONObject
 
 /** Saved preference is separate from starting/stopping standby. */
 class StandbyDurationView(context: Context) : LinearLayout(context) {
+    private val current = TextView(context).apply { textSize = 11f; setTextColor(WatchUi.muted) }
+
+    internal fun showCurrent(state: JSONObject) {
+        val status = currentLabel(state) + " · " + state.optString("syncStatus")
+        if (current.text.toString() != status) current.text = status
+    }
+
+    companion object {
+        internal fun currentLabel(state: JSONObject): String {
+            val duration = when {
+                !state.optBoolean("enabled") -> "已关闭"
+                state.isNull("remainingMs") -> "不限时"
+                else -> "剩余 ${(state.getLong("remainingMs") + 999) / 1000} 秒"
+            }
+            return "本次交互：$duration"
+        }
+    }
+
     init {
         orientation = VERTICAL
         fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
         fun label(value: String) = TextView(context).apply { text = value; textSize = 11f; setTextColor(WatchUi.muted) }
+        addView(current)
+        addView(label("本端开启偏好"), LayoutParams(-1,-2).apply { topMargin = dp(8) })
         val saved = CapabilityBridgeService.duration(context)
         val follow = CheckBox(context).apply {
             text = "跟随电脑设置"; textSize = 12f; setTextColor(Color.WHITE)
@@ -27,7 +48,7 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
         val unlimited = CheckBox(context).apply {
             text = "不限时"; textSize = 12f; setTextColor(Color.WHITE)
             buttonTintList = ColorStateList.valueOf(WatchUi.accent); isChecked = saved == 0L
-            contentDescription = "待命不限时"
+            contentDescription = "本端开启偏好不限时"
         }
         addView(unlimited)
         addView(label("限制时长"))
@@ -77,7 +98,8 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
                     val value = if (follow.isChecked) CapabilityBridgeService.duration(context) else
                         StandbyDuration.parse(unlimited.isChecked, if (unlimited.isChecked) 0.0 else amount.text.toString().toDouble(), unit.selectedItemPosition == 1)
                     if (!CapabilityBridgeService.saveDuration(context,value,follow.isChecked)) throw IllegalStateException("保存失败，请重试")
-                    message.text = if (follow.isChecked) "已保存：跟随电脑，连接后确认同步" else if (value == 0L) "已保存：不限时" else "已保存：限时从本次保存开始计时"
+                    message.text = if (follow.isChecked) "已保存本端偏好为跟随电脑" else "已保存本端开启偏好"
+                    showCurrent(AgentInteraction.state())
                 } catch (_: NumberFormatException) { message.text = "请输入有效时长" }
                 catch (e: IllegalArgumentException) { message.text = e.message }
                 catch (e: IllegalStateException) { message.text = e.message }
@@ -85,6 +107,6 @@ class StandbyDurationView(context: Context) : LinearLayout(context) {
         }
         addView(save,LayoutParams(-1,dp(44)).apply { topMargin = dp(8) })
         addView(message)
-        addView(label("开启交互时使用本端时长；运行中保存会同步新期限。未开启时只保存下次偏好。重连及重复同步不续期。"),LayoutParams(-1,-2).apply { topMargin = dp(6) })
+        addView(label("从本端开启时使用此设置。交互开启期间保存，会更新两端本次交互的期限。"),LayoutParams(-1,-2).apply { topMargin = dp(6) })
     }
 }

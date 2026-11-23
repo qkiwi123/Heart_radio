@@ -31,8 +31,13 @@ class ConnectionApiTests(unittest.TestCase):
         response=client.getresponse();return response.status,response.read()
 
     def test_state_is_local_and_never_creates_a_connection(self):
-        status,body=self.request('GET','/api/connection')
-        self.assertEqual(status,200);self.assertFalse(json.loads(body)['connected'])
+        host = dict(network=dict(state='connected', kind='wifi', name='办公室'), bluetooth='off')
+        with patch.object(server.host_connectivity, 'snapshot', return_value=host):
+            status,body=self.request('GET','/api/connection')
+        self.assertEqual(status,200)
+        state = json.loads(body)
+        self.assertFalse(state['connected'])
+        self.assertEqual(state['hostConnectivity'], host)
         self.transport.control.assert_not_called();self.access.call.assert_not_called()
 
     def test_connection_controls_reject_cross_origin_and_non_object_bodies(self):

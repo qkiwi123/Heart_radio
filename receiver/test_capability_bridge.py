@@ -101,6 +101,32 @@ class LocalEndpointTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_heart_history_crosses_the_wifi_bridge_without_logging_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'log.jsonl'
+            bridge = Bridge(b'x' * 32, log)
+            reader = asyncio.StreamReader()
+            reader.feed_data(b'x' * 32)
+            writer = FakeWriter(reader)
+            connection = asyncio.create_task(bridge.connected(reader, writer))
+            try:
+                await until(lambda: bridge.writer is writer)
+                params = {'metric': 'heart_rate', 'from': 1794675600, 'to': 1794675660}
+                request = asyncio.create_task(bridge.request(dict(op='health_history', params=params)))
+                await until(lambda: len(writer.rows) == 2)
+                command = json.loads(writer.rows[-1][4:])
+                self.assertEqual(command['params'], params)
+                reader.feed_data(frame(dict(id=command['id'], op='health_history',
+                                            status='ok', metric='heart_rate', rows=[[100, 85, 4]])))
+                result = await request
+                self.assertEqual(result['rows'], [[100, 85, 4]])
+                self.assertEqual(result['transport'], 'wifi_tls')
+            finally:
+                writer.close()
+                await connection
+                bridge.log_file.close()
+            self.assertNotIn('"rows"', log.read_text(encoding='utf-8'))
+
     async def test_uncertain_reminder_timeout_is_not_replayed_or_sent_as_sensor_cancel(self):
         with tempfile.TemporaryDirectory() as directory:
             bridge=Bridge(b'x'*32,Path(directory)/'log.jsonl');writer=FakeWriter();bridge.writer=writer

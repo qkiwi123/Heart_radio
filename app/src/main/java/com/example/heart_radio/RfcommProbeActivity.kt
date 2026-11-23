@@ -44,7 +44,7 @@ class RfcommProbeActivity : Activity() {
                 if (RfcommProbeService.running()) stopService(Intent(this@RfcommProbeActivity, RfcommProbeService::class.java))
                 else if (Build.VERSION.SDK_INT >= 31 && !Probe.bluetoothAllowed(this@RfcommProbeActivity))
                     requestPermissions(arrayOf("android.permission.BLUETOOTH_CONNECT", "android.permission.BLUETOOTH_ADVERTISE"), 21)
-                else startForegroundService(Intent(this@RfcommProbeActivity, RfcommProbeService::class.java))
+                else startService(Intent(this@RfcommProbeActivity, RfcommProbeService::class.java))
             }
         }
         layout.addView(toggle)
@@ -70,8 +70,9 @@ class RfcommProbeActivity : Activity() {
         layout.addView(label("独立测试通道，最长60分钟。仅接受已配置、已配对电脑。电脑可按需开始心率、读取状态和发送提醒。返回表盘继续测试，停止测试只释放连接；心率已统一到主页面，需单独停止。提醒受 Agent 交互开关控制。", 12f))
         setContentView(ScrollView(this).apply { isVerticalFadingEdgeEnabled=false; addView(layout) })
         // The maintenance flag is used only for the explicitly requested USB test session.
-        if (intent.getBooleanExtra("start_test", false) && !ConnectionService.running() && !RfcommProbeService.running())
-            startForegroundService(Intent(this, RfcommProbeService::class.java))
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
+            intent.getBooleanExtra("start_test", false) && !ConnectionService.running() && !RfcommProbeService.running())
+            startService(Intent(this, RfcommProbeService::class.java))
     }
     override fun onResume() { super.onResume(); handler.post(tick) }
     override fun onPause() { handler.removeCallbacks(tick); super.onPause() }

@@ -15,6 +15,7 @@ BRIDGE_URL = 'http://127.0.0.1:8768'
 LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 sys.path.insert(0, str(ROOT / 'receiver'))
 from rfcomm_probe import Probe
+from health_protocol import STRESS_REPLY_SECONDS
 from state import State
 from transport_policy import MODES,allowed,choose
 from control import Deadline,read_settings,atomic_json
@@ -47,11 +48,13 @@ class HeartCache:
             if event == 'hello':
                 self.connected = True
                 self.last_sequence = None
-                self.consume(dict(now, kind='wifi_connected', target='paired_bluetooth'))
+                self.consume(dict(now, kind='rfcomm_connected', target='paired_bluetooth'))
             elif event == 'disconnected':
+                if not self.connected:
+                    return  # A failed open (or repeated cleanup) never established a session.
                 self.connected = False
                 self.control = {}
-                self.consume(dict(now, kind='wifi_disconnected'))
+                self.consume(dict(now, kind='rfcomm_disconnected'))
             if 'heartRunning' in row:
                 self.control = dict(row)
                 self.control_at = time.monotonic()
@@ -78,6 +81,12 @@ class HeartCache:
             self.state.current_allowed = False
             self.state.last_event = None
             self.last_sequence = None
+
+    def route_changed(self):
+        with self.lock:
+            self.last_sequence = None
+            self.consume(dict(kind='route_changed', pcReceiptMs=time.time_ns()//1_000_000,
+                              pcMonotonicNs=time.monotonic_ns()))
 
     def snapshot(self):
         with self.lock:
@@ -387,7 +396,7 @@ class TransportAccess:
         with self.lock:
             self.sync_fingerprint=None;self.sync_token=None;self.peer_enabled=None
             self.selected=None;self.selected_key=None;self.selection_id=None;self.mode='none';self.selected_ms=0
-            self.cache.observe(dict(event='disconnected'));self.waiting_since=time.monotonic()
+            self.cache.route_changed();self.waiting_since=time.monotonic()
 
     def _token(self):
         return (self.selected,self.selected_key,self.selection_id)
@@ -429,8 +438,7 @@ class TransportAccess:
                 with self.lock:
                     self.selected=candidate;self.mode=candidate;self.selected_key=key;self.selection_id=identity;self.selected_ms=time.time_ns()//1_000_000
                     self.wifi_heart_session=reply.get('wifiHeartSession')
-                    self.cache.observe(dict(event='disconnected'))
-                    if candidate=='rfcomm':self.cache.observe(dict(event='hello'))
+                    self.cache.route_changed()
                 self.message='蓝牙已连接' if candidate=='rfcomm' else 'Wi-Fi已连接'
             else:self.message='等待手表支持并确认连接方式'
         elif not active:self.message='等待手表或可用无线连接；会自动重试'
@@ -461,8 +469,11 @@ class TransportAccess:
         if not stop.is_relative_to((self.root/'runs').resolve()) or stop.name!='stop.request':raise ValueError('Invalid project receiver stop path')
         stop.touch(exist_ok=True)
 
-    def start(self):
+    def start(self, *, enable_on_start=False):
         with self.lock:
+            if self.offline.fired:raise ValueError('电脑端正在退出，请用 01 启动后再开启连接')
+            if enable_on_start:
+                self.enabled_on_start=True;self._preferences()
             self.managed=True
             if self.manager_thread and self.manager_thread.is_alive():return
             if self.session['suspended']:
@@ -539,8 +550,13 @@ class TransportAccess:
                     try:self._preferences()
                     except (OSError,ValueError):
                         self.configured_mode,self.enabled_on_start=previous;raise
-                    # A user-requested preference change reselects; authenticated sockets stay open.
-                    self._drop_route();self.prepare_requested.set();self._route_once_locked(self.manager_stop)
+                    ready = {name: state['connected'] for name, state in candidates.items()}
+                    preferred = choose(mode, ready)
+                    # Keep the current selection ID when adding a standby adapter.
+                    # Frames already in flight still belong to this authenticated session.
+                    if not self.selected or self.selected != preferred or candidates[preferred]['key'] != self.selected_key:
+                        self._drop_route()
+                    self.prepare_requested.set();self._route_once_locked(self.manager_stop)
                     if mode=='wifi':self._stop_bluetooth_adapter()
                     elif mode=='rfcomm':self._stop_wifi_adapter()
                     return self.state()
@@ -588,6 +604,7 @@ class TransportAccess:
         return value
 
     def state(self):
+        with self.lock:project_session=dict(self.session,shutdownPending=self.offline.fired)
         if self.managed:
             self._limits()
             interaction=self._interaction_state()
@@ -600,15 +617,15 @@ class TransportAccess:
                         watchControl=dict(self.cache.control) if self.selected=='rfcomm' else (self.candidates.get('wifi',{}).get('watch') or {}),
                         candidates=self.candidates,status=self.message,backingError=self.backing_error,
                         automaticRouting=True,switchSyncSupported=True,agentInteraction=interaction,reminderPolicy=self.reminder_policy_state(),
-                        heartBroadcast=self._broadcast_state(),projectSession=dict(self.session,remainingSeconds=self.offline.remaining(time.monotonic(),bool(self.selected))),
+                        heartBroadcast=self._broadcast_state(),projectSession=dict(project_session,remainingSeconds=self.offline.remaining(time.monotonic(),bool(self.selected))),
                         agentRemainingSeconds=interaction['remainingMs']/1000 if interaction['remainingMs'] is not None else None)
         if self.mode=='rfcomm':
             result=self.probe.state() if self.probe else dict(connected=False)
             return dict(result, transport='rfcomm', mode='rfcomm', connectionRunning=bool(self.thread and self.thread.is_alive()),
                         agentEnabled=self.agent_enabled, heartReceiveEnabled=self.cache.receiving,
-                        watchControl=dict(self.cache.control), watchControlAgeSeconds=time.monotonic()-self.cache.control_at if self.cache.control_at else None, switchSyncSupported=False, automaticRouting=False,projectSession=dict(self.session))
+                        watchControl=dict(self.cache.control), watchControlAgeSeconds=time.monotonic()-self.cache.control_at if self.cache.control_at else None, switchSyncSupported=False, automaticRouting=False,projectSession=project_session)
         return dict(self.wifi_state(), transport='wifi', mode='wifi', agentEnabled=None,configuredMode=self.configured_mode,enabledOnStart=self.enabled_on_start,
-                    switchSyncSupported=False, automaticRouting=False,projectSession=dict(self.session))
+                    switchSyncSupported=False, automaticRouting=False,projectSession=project_session)
 
     @staticmethod
     def wifi_state():
@@ -620,6 +637,8 @@ class TransportAccess:
         except (OSError,ValueError): return dict(status='bridge_unavailable',connected=False)
 
     def request(self, op, params=None, request_id=None):
+        if op == 'health_stress' and not self.managed:
+            return dict(status='interaction_sync_pending' if self.agent_enabled else 'interaction_disabled')
         if self.managed:
             self._limits()
             if op!='cancel' and not self.agent_enabled:return dict(status='interaction_disabled')
@@ -631,20 +650,26 @@ class TransportAccess:
                 from reminder_protocol import normalize
                 rejected=policy_violation(normalize(params),policy['limits'])
                 if rejected:return rejected
-            with self.lock:token=self._token()
+            with self.lock:
+                token=self._token()
+                stress_gate = self.interaction.register.fingerprint() if op == 'health_stress' else None
             expected=None
             if op in ('sample','heart_sample','motion_window'):expected=getattr(self.local,'inventory_route',None);self.local.inventory_route=None
             if op=='cancel':expected=self.sample_routes.get((params or {}).get('targetId'))
             if not token[0] or (expected is not None and expected!=token):return dict(status='outcome_unknown_disconnected' if op in ('sample','heart_sample','motion_window','cancel') else 'watch_offline')
             if op=='inventory':self.local.inventory_route=token
-            if op in ('sample','heart_sample','motion_window') and request_id:self.sample_routes[request_id]=token
+            if op in ('sample','heart_sample','motion_window','health_stress') and request_id:self.sample_routes[request_id]=token
             try:
                 result=self._raw(token[0],op,params,request_id)
                 with self.lock:
                     if token!=self._token():return dict(status='outcome_unknown_disconnected',id=request_id)
+                    if op == 'health_stress' and result.get('status') == 'ok' and (
+                            not self._sync_confirmed() or not self.agent_enabled or
+                            self.interaction.register.fingerprint() != stress_gate):
+                        return dict(status='interaction_changed', id=request_id)
                 return result
             finally:
-                if op in ('sample','heart_sample','motion_window') and request_id:self.sample_routes.pop(request_id,None)
+                if op in ('sample','heart_sample','motion_window','health_stress') and request_id:self.sample_routes.pop(request_id,None)
         if self.mode=='rfcomm':
             if op!='cancel' and not self.agent_enabled:return dict(status='interaction_disabled')
             if not self.probe:return dict(status='watch_offline')
@@ -663,7 +688,8 @@ class TransportAccess:
             data=json.dumps(payload,allow_nan=False).encode(),
             headers={'Content-Type':'application/json','X-HeartRadio-Probe':'request'})
         try:
-            with LOCAL_HTTP.open(request,timeout=4 if op=='cancel' else 40 if op=='motion_window' else 22) as response:
+            timeout = {'cancel': 4, 'motion_window': 40, 'health_stress': STRESS_REPLY_SECONDS + 6}.get(op, 22)
+            with LOCAL_HTTP.open(request,timeout=timeout) as response:
                 data=response.read(65537)
             if len(data)>65536:raise ValueError('Oversize result')
             value=json.loads(data)
@@ -681,13 +707,15 @@ class TransportAccess:
                     if self.selected:self._sync_once()
                 elif self.selected:self._raw(self.selected,'stop_bridge')
                 self.agent_enabled=False;self.stop()
-            elif value['action']=='start':self.enabled_on_start=True;self._preferences();self.start()
+            elif value['action']=='start':self.start(enable_on_start=True)
             elif self.enabled_on_start:self.start()
             return self.state()
         if not isinstance(value,dict) or set(value)!={'action'}:raise ValueError('Invalid connection action')
         action=value['action']
         if action not in ('start_bluetooth','stop','use_legacy_wifi','agent_on','agent_off','heart_receive_on','heart_receive_off','heart_broadcast_on','heart_broadcast_off'):
             raise ValueError('Unknown connection action')
+        if action in ('start_bluetooth','use_legacy_wifi'):
+            return self._change_mode('rfcomm' if action=='start_bluetooth' else 'wifi')
         if action in ('heart_broadcast_on','heart_broadcast_off'):
             if not self.managed:self.managed=True;self.mode='none'
             self._edit_broadcast(action=='heart_broadcast_on');return self.state()
@@ -695,8 +723,6 @@ class TransportAccess:
             self.managed=True;self.mode='none'  # Save offline without creating a connection.
         if self.managed:
             self._limits()
-            if action in ('start_bluetooth','use_legacy_wifi'):
-                return self.control(dict(action='set_mode',mode='rfcomm' if action=='start_bluetooth' else 'wifi'))
             if action=='stop':
                 self.enabled_on_start=False;self._preferences();self.stop()
             elif action in ('agent_on','agent_off'):
@@ -710,28 +736,11 @@ class TransportAccess:
                     self.prepare_requested.set()
             return self.state()
         with self.lock:
-            if action=='start_bluetooth':
-                if self.thread and self.thread.is_alive():return self.state()
-                config=json.loads((self.root/'.local-wifi/rfcomm-probe.json').read_text(encoding='utf-8'))
-                directory=self.root/'runs'/'connection-stage1'/uuid.uuid4().hex
-                directory.mkdir(parents=True)
-                receiving=self.cache.receiving
-                self.cache=HeartCache()
-                self.cache.receiving=receiving
-                self.probe=Probe(config,directory/'pc.jsonl',message_observer=self.cache.observe)
-                self.mode='rfcomm'
-                probe=self.probe
-                def run():
-                    try:probe.run(3600)  # Deliberate stage-1 verification window, not a daily-service promise.
-                    finally:probe.stream.close()
-                self.thread=threading.Thread(target=run,name='stage1-rfcomm',daemon=True)
-                self.thread.start()
-            elif action in ('stop','use_legacy_wifi'):
+            if action=='stop':
                 if self.probe:
                     self.probe.stopping.set()
                     self.probe.disconnected()
                     if self.probe.client:self.probe.client.close()
-                if action=='use_legacy_wifi':self.mode='wifi'
             elif action in ('agent_on','agent_off'):
                 if self.mode!='rfcomm':raise ValueError('The new local gate currently belongs to the stage-1 Bluetooth path')
                 self.agent_enabled=action=='agent_on'

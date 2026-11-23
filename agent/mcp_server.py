@@ -12,7 +12,18 @@ from process_registry import registered
 TOOLS = json.loads(Path(__file__).with_name('tools.json').read_text(encoding='utf-8'))
 
 VERSIONS = ('2024-11-05', '2025-06-18')
-SERVER_VERSION = '0.7.0'
+SERVER_VERSION = '0.13.0'
+INSTRUCTIONS = (
+    '当需要了解用户的佩戴、睡眠报告、活动情况或相关传感器数据时，可以通过 HeartRadio 读取手表观测。'
+    '当需要及时引起用户注意时，可以在用户授权的范围内向手表发送即时提醒。\n\n'
+    '在已获授权的任务中，主动用手表提醒用户介入前，先调用 get_user_state({"metrics":[]}) 确认在腕。'
+    '离腕或无法确认佩戴时，把待处理事项留在电脑上。用户明确要求立即发送时，可以直接调用 send_reminder。\n\n'
+    'Health values may be absent or stale. Sleep reports reflect the most recent vendor event and its time. '
+    'Device evidence may differ from the person’s actual state. Unknown is an expected result and must not be automatically retried. '
+    'New watch operations require synchronized Agent interaction. Tools cannot enable interaction or continuous heart capture. '
+    'Reminders are immediate effects, never automatically replayed. Reuse the same reminder_id when checking uncertain sends. '
+    'Issued or displayed does not mean human acknowledgement.'
+)
 LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -21,7 +32,11 @@ def validate(value, schema):
     if kind == 'object':
         if not isinstance(value, dict) or set(value) - set(schema.get('properties', {})):
             raise ValueError('Unknown or invalid object fields')
-        if set(schema.get('required', [])) - set(value): raise ValueError('Required arguments missing')
+        if missing := set(schema.get('required', [])) - value.keys():
+            raise ValueError('Missing required arguments: ' + ', '.join(sorted(missing)))
+        exclusive = schema.get('not', {}).get('required')
+        if exclusive and all(key in value for key in exclusive):
+            raise ValueError('Use only one of: ' + ', '.join(exclusive))
         for key, item in value.items(): validate(item, schema['properties'][key])
     elif kind == 'string':
         import re
@@ -58,11 +73,17 @@ class Server:
         tool = next((tool for tool in TOOLS if tool['name'] == name), None)
         if tool is None: raise ValueError('Unknown tool')
         validate(arguments, tool['inputSchema'])
+        # Make wear-only explicit so an older dashboard cannot interpret {} as all metrics.
+        if name == 'get_user_state' and not arguments:
+            arguments = {'metrics': []}
         request = urllib.request.Request(f'http://127.0.0.1:{self.port}/api/tools',
             data=json.dumps(dict(name=name, arguments=arguments), allow_nan=False).encode(),
             headers={'Content-Type': 'application/json', 'X-HeartRadio-Action': 'tools'})
         try:
-            with LOCAL_HTTP.open(request, timeout=65 if name=='get_user_state' else 50) as response:
+            # The outer wait must include the initial wear query and the full pressure
+            # transport deadline, which itself includes the watch's wear check and page.
+            timeout = (105 if 'stress' in arguments.get('metrics', []) else 65) if name == 'get_user_state' else 50
+            with LOCAL_HTTP.open(request, timeout=timeout) as response:
                 data = response.read(65537)
                 if len(data) > 65536: raise ValueError('Local tool response exceeds limit')
                 value = json.loads(data)
@@ -96,7 +117,7 @@ class Server:
                 self.negotiated = params['protocolVersion'] if params['protocolVersion'] in VERSIONS else VERSIONS[-1]
                 value = dict(protocolVersion=self.negotiated, capabilities=dict(tools=dict(listChanged=False)),
                              serverInfo=dict(name='heartradio-local', version=SERVER_VERSION),
-                             instructions='Health values may be absent or stale; Only get_user_state returns weak unvalidated activity/rest tiers, assuming normal wear when the service is available. Do not turn them into confirmed wakefulness, sleep, walking, steps, location, SpO2 or ECG. Unknown is an expected result and must not be automatically retried. New watch operations require the synchronized Agent interaction switch; tools cannot enable it or continuous heart capture. Reminders are explicit immediate effects, never automatically replayed. Reuse the same reminder_id when checking uncertain sends; issued/displayed does not mean human acknowledgement.')
+                             instructions=INSTRUCTIONS)
             elif method == 'ping':
                 value = {}
             elif not self.ready:
@@ -114,7 +135,9 @@ class Server:
             else:
                 return error(-32601, 'Method not found')
             return dict(jsonrpc='2.0', id=request_id, result=value)
-        except (ValueError, TypeError):
+        except ValueError as exc:
+            return error(-32602, str(exc))
+        except TypeError:
             return error(-32602, 'Invalid tool parameters')
         except OSError:
             return error(-32603, 'Local operation failed')

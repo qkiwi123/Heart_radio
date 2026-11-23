@@ -59,7 +59,6 @@ class CapabilityBridgeService : Service() {
         }
     }
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var engine: CapabilityEngine
     private lateinit var manager: ConnectivityManager
     private var callbackAdded = false
     private val retrySignal = Object()
@@ -100,7 +99,6 @@ class CapabilityBridgeService : Service() {
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate()
-        engine = DeviceGateway.engine(this)
         manager = getSystemService(ConnectivityManager::class.java)
         liveService = this
         ReminderEngine.subscribe(receiptObserver)
@@ -279,7 +277,7 @@ class CapabilityBridgeService : Service() {
                     discoverySocket?.close(); discoverySocket = null
                     closeSocket(); socket = null; boundNetwork = null
                     val cleaned = CountDownLatch(1)
-                    handler.post { if(!managedConnection&&liveService===this&&active)engine.cancelAll();cleaned.countDown() }
+                    handler.post { if(!managedConnection&&liveService===this&&active)DeviceGateway.cancelAll();cleaned.countDown() }
                     if (active && !cleaned.await(5, TimeUnit.SECONDS)) fatal = true
                 }
                 if (!active) break
@@ -470,7 +468,7 @@ class CapabilityBridgeService : Service() {
         ReminderEngine.unsubscribe(receiptObserver)
         // Explicit stopService is a stop too. Android process death does not call this method.
         if (active) finish("service_destroyed")
-        if(!managedConnection&&liveService===this)engine.cancelAll()
+        if(!managedConnection&&liveService===this)DeviceGateway.cancelAll()
         handler.removeCallbacksAndMessages(null)
         if (callbackAdded) { manager.unregisterNetworkCallback(networkCallback); callbackAdded = false }
         closeSocket(); worker?.interrupt()

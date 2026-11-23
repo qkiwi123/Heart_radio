@@ -99,6 +99,20 @@ class ServiceTests(unittest.TestCase):
             launch.assert_not_called()
         self.assertFalse((self.service.directory(self.info) / 'stop.request').exists())
 
+    def test_old_stop_and_complete_process_list_distinguish_missing_and_inaccessible_pid(self):
+        self.register()
+        self.service._windows.process.side_effect = OSError(5, 'access denied')
+        with self.assertRaises(ServiceError):
+            self.service.owned(self.info)
+        path = self.service.directory(self.info) / 'stop.request'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        self.service._windows.processes.return_value = {self.info['pid']: {}}
+        with self.assertRaises(ServiceError):
+            self.service.owned(self.info)
+        self.service._windows.processes.return_value = {}
+        self.assertFalse(self.service.owned(self.info))
+
     def test_instance_identity_mismatch_does_not_claim_watch_connected(self):
         self.register()
         self.service.bridge_state.return_value = dict(instanceId='b'*32, connected=True)

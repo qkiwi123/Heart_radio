@@ -4,8 +4,9 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from export_package import export
+from export_package import REQUIRED_PC_VERSION, export
 
 spec = importlib.util.spec_from_file_location('package_check', Path(__file__).parent / 'package' / 'check.py')
 check_module = importlib.util.module_from_spec(spec)
@@ -18,11 +19,20 @@ class PackageTests(unittest.TestCase):
             destination = Path(directory) / 'heartradio'
             result = export(destination, Path(sys.executable), port=1, allow_dirty=True)
             self.assertFalse(result['agentConfigModified'])
+            config = json.loads((destination / 'clients/hermes.json').read_text(encoding='utf-8'))
+            self.assertGreaterEqual(config['mcp_servers']['heartradio']['timeout'], 120)
             status = check_module.check(destination)
             self.assertTrue(status['packageValid'])
-            self.assertEqual(len(status['tools']), 11)
+            self.assertEqual(len(status['tools']), 13)
             self.assertEqual(status['localService'], 'local_service_unavailable')
             self.assertFalse(status['localServiceAvailable'])
+            self.assertEqual(status['requiredPcVersion'], REQUIRED_PC_VERSION)
+            self.assertIsNone(status['localServiceCompatible'])
+            for actual, expected in (('1.15.0-mcp', False), (REQUIRED_PC_VERSION, True)):
+                with patch.object(check_module, 'dashboard_version', return_value=actual):
+                    pairing = check_module.check(destination)
+                self.assertEqual(pairing['localServiceVersion'], actual)
+                self.assertIs(pairing['localServiceCompatible'], expected)
             (destination / 'tools.json').write_text('[]', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'changed or missing'):
                 check_module.check(destination)

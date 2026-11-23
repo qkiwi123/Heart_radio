@@ -2,8 +2,27 @@
 import math
 import statistics
 
-LABELS = {1:'可能在休息', 2:'清醒且可能不明显活动', 3:'清醒且活动较明显'}
+LABELS = {1:'可能在休息', 2:'活动较少', 3:'活动明显'}
 RULE_VERSION = 'three-tier-v1'
+LEGACY_STATE_METRICS = ('sleep', 'heart_rate', 'accelerometer', 'gyroscope')
+STATE_METRICS = (*LEGACY_STATE_METRICS, 'stress')
+
+
+def selected_state_metrics(arguments):
+    if not isinstance(arguments, dict) or set(arguments) - {'metrics', 'include_sleep', 'wearer_state'}:
+        raise ValueError('Invalid user state arguments')
+    if 'include_sleep' in arguments:
+        if 'metrics' in arguments or 'wearer_state' in arguments or type(arguments['include_sleep']) is not bool:
+            raise ValueError('Use either metrics or include_sleep')
+        return LEGACY_STATE_METRICS if arguments['include_sleep'] else LEGACY_STATE_METRICS[1:]
+    metrics = arguments.get('metrics', [])
+    if (not isinstance(metrics, list) or len(metrics) > len(STATE_METRICS)
+            or any(type(metric) is not str or metric not in STATE_METRICS for metric in metrics)
+            or len(set(metrics)) != len(metrics)):
+        raise ValueError('Invalid user state metrics')
+    if 'wearer_state' in arguments and ('stress' not in metrics or arguments['wearer_state'] not in ('still','moving','unknown')):
+        raise ValueError('wearer_state requires an explicitly selected stress metric')
+    return tuple(metrics)
 
 
 def number(value):
@@ -64,7 +83,7 @@ def heart_summary(observations, begin_ms, end_ms):
 def classify(accel,gyro,observations,begin_ms,end_ms):
     result=dict(schemaVersion=1,operation='get_user_state',ok=False,status='insufficient_data',
         tier=None,label='暂不判断',source='local_heuristic',ruleVersion=RULE_VERSION,
-        accuracy='unmeasured',wearBasis='service_available_assumption',sourceAgeVerified=False,
+        accuracy='unmeasured',sourceAgeVerified=False,
         requestedSeconds=30,completedAtMs=end_ms)
     try:
         a=motion_bins(accel,1);g=motion_bins(gyro,4)
@@ -77,9 +96,11 @@ def classify(accel,gyro,observations,begin_ms,end_ms):
         result['reason']=str(error)[:80];return result
     quiet=sum(a[s]<=.1 and g[s]<=.05171 for s in seconds)/len(seconds)
     strong=sum(a[s]>=.8 or g[s]>=.4 for s in seconds)/len(seconds)
-    heart=heart_summary(observations,begin_ms,end_ms)
+    heart=heart_summary(observations or [],begin_ms,end_ms)
     result.update(ok=True,motion=dict(validSeconds=len(seconds),quietFraction=round(quiet,3),
-        strongFraction=round(strong,3),accelerationRms=round(accel['rms'],3),rotationRms=round(gyro['rms'],3)),heartRate=heart)
+        strongFraction=round(strong,3),accelerationRms=round(accel['rms'],3),rotationRms=round(gyro['rms'],3)))
+    if observations is not None:
+        result['heartRate'] = heart
     if strong>=.5:tier=3;reason='sustained_clear_motion'
     elif quiet>=.8 and strong<.1:
         tier=1 if heart['stable'] else None
@@ -89,6 +110,6 @@ def classify(accel,gyro,observations,begin_ms,end_ms):
         status='classified' if tier else 'insufficient_evidence')
     evidence=(f'{quiet:.0%}有效时间手腕活动很少' if quiet>=.8 else
               f'{strong:.0%}有效时间有明显手腕动作' if tier==3 else '有少量或间歇手腕动作')
-    heart_text=(f"；本次请求内有效心率平均{heart['meanBpm']:g}次/分" if heart['meanBpm'] is not None else '；本次请求内无有效心率')
+    heart_text=(f"，本次请求内有效心率平均{heart['meanBpm']:g}次/分" if heart['meanBpm'] is not None else '')
     result['summary']=f'本次30秒观察，{evidence}{heart_text}。粗略推测，准确率未测定。'
     return result

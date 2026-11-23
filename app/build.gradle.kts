@@ -12,15 +12,19 @@ android {
 
     defaultConfig {
         applicationId = "dev.local.watch2.hrprobe"
+        manifestPlaceholders["exportBluetoothDiagnostics"] = "false"
         minSdk = 27
         targetSdk = 36
-        versionCode = 45
-        versionName = "1.11.2-retention"
+        versionCode = 56
+        versionName = "1.14.1-stress"
         testInstrumentationRunner = "com.example.heart_radio.IdleInstrumentation"
 
     }
 
     buildTypes {
+        debug {
+            manifestPlaceholders["exportBluetoothDiagnostics"] = "true"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
